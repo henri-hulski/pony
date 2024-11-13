@@ -55,6 +55,7 @@ def flatten(x):
     return result
 
 class TestConnection(object):
+    __test__ = False
     def __init__(con, database):
         con.database = database
         if database and database.provider_name == 'postgres':
@@ -67,6 +68,7 @@ class TestConnection(object):
         return test_cursor
 
 class TestCursor(object):
+    __test__ = False
     def __init__(cursor):
         cursor.description = []
         cursor.rowcount = 0
@@ -79,9 +81,11 @@ class TestCursor(object):
     def fetchall(cursor):
         return []
 
+
 test_cursor = TestCursor()
 
 class TestPool(object):
+    __test__ = False
     def __init__(pool, database):
         pool.database = database
     def connect(pool):
@@ -94,6 +98,7 @@ class TestPool(object):
         pass
 
 class TestDatabase(Database):
+    __test__ = False
     real_provider_name = None
     raw_server_version = None
     sql = None

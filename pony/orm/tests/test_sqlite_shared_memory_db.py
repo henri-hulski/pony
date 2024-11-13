@@ -20,6 +20,7 @@ with db_session:
 
 
 class TestThread(threading.Thread):
+    __test__ = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, *kwargs)
         self.result = []
