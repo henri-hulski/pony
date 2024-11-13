@@ -55,7 +55,7 @@ def generate_gens():
     return final
 
 def create_test(gen):
-    def wrapped_test(self):
+    def wrapped_test(cache):
         def get_condition_values(cond):
             result = []
             vals = (True, False)
@@ -85,13 +85,13 @@ def create_test(gen):
         res3 = res3[res3.find('if')+2: res3.rfind('for')-1]
 
         if get_condition_values(gen) != get_condition_values(res1):
-            self.fail("Incorrect generator decompilation: %s -> %s" % (gen, res1))
+            cache.fail("Incorrect generator decompilation: %s -> %s" % (gen, res1))
 
         if get_condition_values(gen) != get_condition_values(res2):
-            self.fail("Incorrect lambda decompilation: %s -> %s" % (gen, res2))
+            cache.fail("Incorrect lambda decompilation: %s -> %s" % (gen, res2))
 
         if get_condition_values(gen) != get_condition_values(res3):
-            self.fail("Incorrect multi-for generator decompilation: %s -> %s" % (gen, res3))
+            cache.fail("Incorrect multi-for generator decompilation: %s -> %s" % (gen, res3))
 
     return wrapped_test
 

@@ -8,11 +8,13 @@ db = Database()
 
 
 class TestPost(db.Entity):
+    __test__ = False
     category = Optional('TestCategory')
     name = Optional(str, default='Noname')
 
 
 class TestCategory(db.Entity):
+    __test__ = False
     posts = Set(TestPost)
 
 
