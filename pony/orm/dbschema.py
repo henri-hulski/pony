@@ -1,96 +1,181 @@
-from __future__ import absolute_import, print_function, division
+from __future__ import absolute_import, annotations, print_function, division
+import _typeshed
+
 from pony.py23compat import int_types
 
 from operator import attrgetter
 
 from pony.orm import core
-from pony.orm.core import log_sql, DBSchemaError, MappingError
+from pony.orm.core import (
+    Attribute,
+    DbConnection,
+    EntityMeta,
+    log_sql,
+    DBSchemaError,
+    MappingError,
+    TableName,
+)
 from pony.utils import throw
+from collections.abc import Sequence
+from pony.orm.dbapiprovider import Converter, DBAPIProvider
+from typing import Any, ClassVar
+from typing_extensions import Literal, Self
+
 
 class DBSchema(object):
-    dialect = None
-    inline_fk_syntax = True
-    named_foreign_keys = True
-    def __init__(schema, provider, uppercase=True):
+    provider: DBAPIProvider
+    tables: dict[TableName, Table]
+    constraints: dict[str, Constraint]
+    indent: str
+    command_separator: str
+    uppercase: bool
+    names: dict[TableName, Table]
+
+    dialect: ClassVar[str | _typeshed.MaybeNone] = None
+    inline_fk_syntax: ClassVar[bool] = True
+    named_foreign_keys: ClassVar[bool] = True
+    table_class: ClassVar[type[Table]]
+    column_class: ClassVar[type[Column]]
+    index_class: ClassVar[type[DBIndex]]
+    fk_class: ClassVar[type[ForeignKey]]
+
+    def __init__(schema, provider: DBAPIProvider, uppercase: bool = True) -> None:
         schema.provider = provider
         schema.tables = {}
         schema.constraints = {}
-        schema.indent = '  '
-        schema.command_separator = ';\n\n'
+        schema.indent = "  "
+        schema.command_separator = ";\n\n"
         schema.uppercase = uppercase
         schema.names = {}
-    def column_list(schema, columns):
+
+    def column_list(schema, columns: Sequence[Column]) -> str:
         quote_name = schema.provider.quote_name
-        return '(%s)' % ', '.join(quote_name(column.name) for column in columns)
-    def case(schema, s):
-        if schema.uppercase: return s.upper().replace('%S', '%s') \
-            .replace(')S', ')s').replace('%R', '%r').replace(')R', ')r')
-        else: return s.lower()
-    def add_table(schema, table_name, entity=None):
+        return "(%s)" % ", ".join(quote_name(column.name) for column in columns)
+
+    def case(schema, s: str) -> str:
+        if schema.uppercase:
+            return (
+                s.upper()
+                .replace("%S", "%s")
+                .replace(")S", ")s")
+                .replace("%R", "%r")
+                .replace(")R", ")r")
+            )
+        else:
+            return s.lower()
+
+    def add_table(
+        schema, table_name: TableName, entity: EntityMeta | None = None
+    ) -> "Table":
         return schema.table_class(table_name, schema, entity)
-    def order_tables_to_create(schema):
+
+    def order_tables_to_create(schema) -> list[Table | Any]:
         tables = []
         created_tables = set()
         split = schema.provider.split_table_name
-        tables_to_create = sorted(schema.tables.values(), key=lambda table: split(table.name))
+        tables_to_create = sorted(
+            schema.tables.values(), key=lambda table: split(table.name)
+        )
         while tables_to_create:
             for table in tables_to_create:
                 if table.parent_tables.issubset(created_tables):
                     created_tables.add(table)
                     tables_to_create.remove(table)
                     break
-            else: table = tables_to_create.pop()
+            else:
+                table = tables_to_create.pop()
             tables.append(table)
         return tables
-    def generate_create_script(schema):
+
+    def generate_create_script(schema) -> str:
         created_tables = set()
         commands = []
         for table in schema.order_tables_to_create():
             for db_object in table.get_objects_to_create(created_tables):
                 commands.append(db_object.get_create_command())
         return schema.command_separator.join(commands)
-    def create_tables(schema, provider, connection):
+
+    def create_tables(
+        schema, provider: DBAPIProvider, connection: DbConnection
+    ) -> None:
         created_tables = set()
         for table in schema.order_tables_to_create():
             for db_object in table.get_objects_to_create(created_tables):
                 base_name = provider.base_name(db_object.name)
                 name = db_object.exists(provider, connection, case_sensitive=False)
-                if name is None: db_object.create(provider, connection)
+                if name is None:
+                    db_object.create(provider, connection)
                 elif name != base_name:
                     quote_name = schema.provider.quote_name
                     n1, n2 = quote_name(db_object.name), quote_name(name)
                     tn1, tn2 = db_object.typename, db_object.typename.lower()
-                    throw(DBSchemaError, '%s %s cannot be created, because %s %s ' \
-                                         '(with a different letter case) already exists in the database. ' \
-                                         'Try to delete %s %s first.' % (tn1, n1, tn2, n2, n2, tn2))
-    def check_tables(schema, provider, connection):
+                    throw(
+                        DBSchemaError,
+                        "%s %s cannot be created, because %s %s "
+                        "(with a different letter case) already exists in the database. "
+                        "Try to delete %s %s first." % (tn1, n1, tn2, n2, n2, tn2),
+                    )
+
+    def check_tables(schema, provider: DBAPIProvider, connection: DbConnection) -> None:
         cursor = connection.cursor()
         split = provider.split_table_name
-        for table in sorted(schema.tables.values(), key=lambda table: split(table.name)):
+        for table in sorted(
+            schema.tables.values(), key=lambda table: split(table.name)
+        ):
             alias = provider.base_name(table.name)
-            sql_ast = [ 'SELECT',
-                        [ 'ALL', ] + [ [ 'COLUMN', alias, column.name ] for column in table.column_list ],
-                        [ 'FROM', [ alias, 'TABLE', table.name ] ],
-                        [ 'WHERE', [ 'EQ', [ 'VALUE', 0 ], [ 'VALUE', 1 ] ] ]
-                      ]
+            sql_ast = [
+                "SELECT",
+                [
+                    "ALL",
+                ]
+                + [["COLUMN", alias, column.name] for column in table.column_list],
+                ["FROM", [alias, "TABLE", table.name]],
+                ["WHERE", ["EQ", ["VALUE", 0], ["VALUE", 1]]],
+            ]
             sql, adapter = provider.ast2sql(sql_ast)
-            if core.local.debug: log_sql(sql)
+            if core.local.debug:
+                log_sql(sql)
             provider.execute(cursor, sql)
 
+
 class DBObject(object):
-    def create(table, provider, connection):
+    def create(table, provider: DBAPIProvider, connection: DbConnection) -> None:
         sql = table.get_create_command()
-        if core.local.debug: log_sql(sql)
+        if core.local.debug:
+            log_sql(sql)
         cursor = connection.cursor()
         provider.execute(cursor, sql)
 
+    def get_create_command(table) -> str:
+        raise NotImplementedError
+
+
 class Table(DBObject):
-    typename = 'Table'
-    def __init__(table, name, schema, entity=None):
+    schema: DBSchema
+    name: TableName
+    column_list: list[Column]
+    column_dict: dict[str, Column]
+    indexes: dict[Sequence[Column], DBIndex]
+    pk_index: DBIndex | None
+    foreign_keys: dict[tuple[Column, ...], ForeignKey]
+    parent_tables: set[Self]
+    child_tables: set[Self]
+    entities: set[EntityMeta]
+    options: dict[str, object]
+    m2m: set[Attribute]
+
+    typename: ClassVar[str] = "Table"
+
+    def __init__(
+        table, name: TableName, schema: DBSchema, entity: EntityMeta | None = None
+    ) -> None:
         if name in schema.tables:
             throw(DBSchemaError, "Table %r already exists in database schema" % name)
         if name in schema.names:
-            throw(DBSchemaError, "Table %r cannot be created, name is already in use" % name)
+            throw(
+                DBSchemaError,
+                "Table %r cannot be created, name is already in use" % name,
+            )
         schema.tables[name] = table
         schema.names[name] = table
         table.schema = schema
@@ -108,108 +193,222 @@ class Table(DBObject):
             table.entities.add(entity)
             table.options = entity._table_options_
         table.m2m = set()
+
     def __repr__(table):
-        return '<Table(%s)>' % table.schema.provider.format_table_name(table.name)
-    def add_entity(table, entity):
+        return "<Table(%s)>" % table.schema.provider.format_table_name(table.name)
+
+    def add_entity(table, entity: EntityMeta) -> None:
         for e in table.entities:
             if e._root_ is not entity._root_:
-                throw(MappingError, "Entities %s and %s cannot be mapped to table %s "
-                                   "because they don't belong to the same hierarchy"
-                                   % (e, entity, table.name))
-        assert '_table_options_' not in entity.__dict__
+                throw(
+                    MappingError,
+                    "Entities %s and %s cannot be mapped to table %s "
+                    "because they don't belong to the same hierarchy"
+                    % (e, entity, table.name),
+                )
+        assert "_table_options_" not in entity.__dict__
         table.entities.add(entity)
-    def exists(table, provider, connection, case_sensitive=True):
+
+    def exists(
+        table,
+        provider: DBAPIProvider,
+        connection: DbConnection,
+        case_sensitive: bool = True,
+    ) -> str | None:
         return provider.table_exists(connection, table.name, case_sensitive)
-    def get_create_command(table):
+
+    def get_create_command(table) -> str:
         schema = table.schema
         case = schema.case
         provider = schema.provider
         quote_name = provider.quote_name
-        if_not_exists = False # provider.table_if_not_exists_syntax and provider.index_if_not_exists_syntax
+        if_not_exists = False  # provider.table_if_not_exists_syntax and provider.index_if_not_exists_syntax
         cmd = []
-        if not if_not_exists: cmd.append(case('CREATE TABLE %s (') % quote_name(table.name))
-        else: cmd.append(case('CREATE TABLE IF NOT EXISTS %s (') % quote_name(table.name))
+        if not if_not_exists:
+            cmd.append(case("CREATE TABLE %s (") % quote_name(table.name))
+        else:
+            cmd.append(case("CREATE TABLE IF NOT EXISTS %s (") % quote_name(table.name))
         for column in table.column_list:
-            cmd.append(schema.indent + column.get_sql() + ',')
-        if len(table.pk_index.columns) > 1:
-            cmd.append(schema.indent + table.pk_index.get_sql() + ',')
-        indexes = [ index for index in table.indexes.values()
-                    if not index.is_pk and index.is_unique and len(index.columns) > 1 ]
-        for index in indexes: assert index.name is not None
-        indexes.sort(key=attrgetter('name'))
-        for index in indexes: cmd.append(schema.indent+index.get_sql() + ',')
+            cmd.append(schema.indent + column.get_sql() + ",")
+        if table.pk_index and len(table.pk_index.columns) > 1:
+            cmd.append(schema.indent + table.pk_index.get_sql() + ",")
+        indexes = [
+            index
+            for index in table.indexes.values()
+            if not index.is_pk and index.is_unique and len(index.columns) > 1
+        ]
+        for index in indexes:
+            assert index.name is not None
+        indexes.sort(key=attrgetter("name"))
+        for index in indexes:
+            cmd.append(schema.indent + index.get_sql() + ",")
         if not schema.named_foreign_keys:
-            for foreign_key in sorted(table.foreign_keys.values(), key=lambda fk: fk.name):
-                if schema.inline_fk_syntax and len(foreign_key.child_columns) == 1: continue
-                cmd.append(schema.indent+foreign_key.get_sql() + ',')
-        interleave_fks = [ fk for fk in table.foreign_keys.values() if fk.interleave ]
+            for foreign_key in sorted(
+                table.foreign_keys.values(), key=lambda fk: fk.name or ""
+            ):
+                if schema.inline_fk_syntax and len(foreign_key.child_columns) == 1:
+                    continue
+                cmd.append(schema.indent + foreign_key.get_sql() + ",")
+        interleave_fks = [fk for fk in table.foreign_keys.values() if fk.interleave]
         if interleave_fks:
             assert len(interleave_fks) == 1
             fk = interleave_fks[0]
-            cmd.append(schema.indent+fk.get_sql())
-            cmd.append(case(') INTERLEAVE IN PARENT %s (%s)') % (
-                quote_name(fk.parent_table.name),
-                ', '.join(quote_name(col.name) for col in fk.child_columns)
-            ))
+            cmd.append(schema.indent + fk.get_sql())
+            cmd.append(
+                case(") INTERLEAVE IN PARENT %s (%s)")
+                % (
+                    quote_name(fk.parent_table.name),
+                    ", ".join(quote_name(col.name) for col in fk.child_columns),
+                )
+            )
         else:
             cmd[-1] = cmd[-1][:-1]
-            cmd.append(')')
+            cmd.append(")")
         for name, value in sorted(table.options.items()):
             option = table.format_option(name, value)
-            if option: cmd.append(option)
-        return '\n'.join(cmd)
+            if option:
+                cmd.append(option)
+        return "\n".join(cmd)
+
     def format_option(table, name, value):
         if value is True:
             return name
         if value is False:
             return None
-        return '%s %s' % (name, value)
-    def get_objects_to_create(table, created_tables=None):
-        if created_tables is None: created_tables = set()
+        return "%s %s" % (name, value)
+
+    def get_objects_to_create(
+        table, created_tables: set[Self] | None = None
+    ) -> Sequence[Table | DBIndex | ForeignKey]:
+        if created_tables is None:
+            created_tables = set()
         created_tables.add(table)
-        result = [ table ]
-        indexes = [ index for index in table.indexes.values() if not index.is_pk and not index.is_unique ]
-        for index in indexes: assert index.name is not None
-        indexes.sort(key=attrgetter('name'))
+        result: list[Self | DBIndex | ForeignKey] = [table]
+        indexes = [
+            index
+            for index in table.indexes.values()
+            if not index.is_pk and not index.is_unique
+        ]
+        for index in indexes:
+            assert index.name is not None
+        indexes.sort(key=attrgetter("name"))
         result.extend(indexes)
         schema = table.schema
         if schema.named_foreign_keys:
-            for foreign_key in sorted(table.foreign_keys.values(), key=lambda fk: fk.name):
-                if foreign_key.parent_table not in created_tables: continue
+            for foreign_key in sorted(
+                table.foreign_keys.values(), key=lambda fk: fk.name or ""
+            ):
+                if foreign_key.parent_table not in created_tables:
+                    continue
                 result.append(foreign_key)
             for child_table in table.child_tables:
-                if child_table not in created_tables: continue
-                for foreign_key in sorted(child_table.foreign_keys.values(), key=lambda fk: fk.name):
-                    if foreign_key.parent_table is not table: continue
+                if child_table not in created_tables:
+                    continue
+                for foreign_key in sorted(
+                    child_table.foreign_keys.values(), key=lambda fk: fk.name or ""
+                ):
+                    if foreign_key.parent_table is not table:
+                        continue
                     result.append(foreign_key)
         return result
-    def add_column(table, column_name, sql_type, converter, is_not_null=None, sql_default=None):
-        return table.schema.column_class(column_name, table, sql_type, converter, is_not_null, sql_default)
-    def add_index(table, index_name, columns, is_pk=False, is_unique=None, m2m=False):
+
+    def add_column(
+        table,
+        column_name: str,
+        sql_type: str,
+        converter: Converter,
+        is_not_null: bool | None = None,
+        sql_default: str | bool | None = None,
+    ) -> "Column":
+        return table.schema.column_class(
+            column_name, table, sql_type, converter, is_not_null, sql_default
+        )
+
+    def add_index(
+        table,
+        index_name: str | bool | None,
+        columns: Sequence[Column],
+        is_pk: str | bool = False,
+        is_unique: bool | None = None,
+        m2m: bool = False,
+    ) -> "DBIndex":
         assert index_name is not False
-        if index_name is True: index_name = None
+        if index_name is True:
+            index_name = None
         if index_name is None and not is_pk:
             provider = table.schema.provider
-            index_name = provider.get_default_index_name(table.name, (column.name for column in columns),
-                                                         is_pk=is_pk, is_unique=is_unique, m2m=m2m)
+            index_name = provider.get_default_index_name(
+                table.name,
+                (column.name for column in columns),
+                is_pk=is_pk,
+                is_unique=is_unique,
+                m2m=m2m,
+            )
         index = table.indexes.get(columns)
-        if index and index.name == index_name and index.is_pk == is_pk and index.is_unique == is_unique:
+        if (
+            index
+            and index.name == index_name
+            and index.is_pk == is_pk
+            and index.is_unique == is_unique
+        ):
             return index
         return table.schema.index_class(index_name, table, columns, is_pk, is_unique)
-    def add_foreign_key(table, fk_name, child_columns, parent_table, parent_columns, index_name=None, on_delete=False,
-                        interleave=False):
+
+    def add_foreign_key(
+        table,
+        fk_name: str | None,
+        child_columns: tuple[Column, ...],
+        parent_table: Self,
+        parent_columns: tuple[Column, ...],
+        index_name: str | None = None,
+        on_delete: str | None = False,
+        interleave: bool | None = False,
+    ) -> "ForeignKey":
         if fk_name is None:
             provider = table.schema.provider
             child_column_names = tuple(column.name for column in child_columns)
-            fk_name = provider.get_default_fk_name(table.name, parent_table.name, child_column_names)
-        return table.schema.fk_class(fk_name, table, child_columns, parent_table, parent_columns, index_name, on_delete,
-                                     interleave=interleave)
+            fk_name = provider.get_default_fk_name(
+                table.name, parent_table.name, child_column_names
+            )
+        return table.schema.fk_class(
+            fk_name,
+            table,
+            child_columns,
+            parent_table,
+            parent_columns,
+            index_name,
+            on_delete,
+            interleave=interleave,
+        )
+
 
 class Column(object):
-    auto_template = '%(type)s PRIMARY KEY AUTOINCREMENT'
-    def __init__(column, name, table, sql_type, converter, is_not_null=None, sql_default=None):
+    table: Table
+    name: str
+    sql_type: str
+    converter: Converter
+    is_not_null: bool | None
+    sql_default: str | bool | None
+    is_pk: bool | Literal["auto"]
+    is_pk_part: bool
+    is_unique: bool
+
+    auto_template: ClassVar[str | None] = "%(type)s PRIMARY KEY AUTOINCREMENT"
+
+    def __init__(
+        column,
+        name: str,
+        table: Table,
+        sql_type: str,
+        converter: Converter,
+        is_not_null: bool | None = None,
+        sql_default: str | bool | None = None,
+    ) -> None:
         if name in table.column_dict:
-            throw(DBSchemaError, "Column %r already exists in table %r" % (name, table.name))
+            throw(
+                DBSchemaError,
+                "Column %r already exists in table %r" % (name, table.name),
+            )
         table.column_dict[name] = column
         table.column_list.append(column)
         column.table = table
@@ -221,9 +420,11 @@ class Column(object):
         column.is_pk = False
         column.is_pk_part = False
         column.is_unique = False
+
     def __repr__(column):
-        return '<Column(%s.%s)>' % (column.table.name, column.name)
-    def get_sql(column):
+        return "<Column(%s.%s)>" % (column.table.name, column.name)
+
+    def get_sql(column) -> str:
         table = column.table
         schema = table.schema
         quote_name = schema.provider.quote_name
@@ -234,65 +435,106 @@ class Column(object):
 
         def add_default():
             if column.sql_default not in (None, True, False):
-                append(case('DEFAULT'))
+                append(case("DEFAULT"))
                 append(column.sql_default)
 
-        if column.is_pk == 'auto' and column.auto_template and column.converter.py_type in int_types:
+        if (
+            column.is_pk == "auto"
+            and column.auto_template
+            and column.converter.py_type in int_types
+        ):
             append(case(column.auto_template % dict(type=column.sql_type)))
             add_default()
         else:
             append(case(column.sql_type))
             add_default()
             if column.is_pk:
-                if schema.dialect == 'SQLite': append(case('NOT NULL'))
-                append(case('PRIMARY KEY'))
+                if schema.dialect == "SQLite":
+                    append(case("NOT NULL"))
+                append(case("PRIMARY KEY"))
             else:
-                if column.is_unique: append(case('UNIQUE'))
-                if column.is_not_null: append(case('NOT NULL'))
+                if column.is_unique:
+                    append(case("UNIQUE"))
+                if column.is_not_null:
+                    append(case("NOT NULL"))
         if schema.inline_fk_syntax and not schema.named_foreign_keys:
             foreign_key = table.foreign_keys.get((column,))
             if foreign_key is not None:
                 parent_table = foreign_key.parent_table
-                append(case('REFERENCES'))
+                append(case("REFERENCES"))
                 append(quote_name(parent_table.name))
                 append(schema.column_list(foreign_key.parent_columns))
                 if foreign_key.on_delete:
-                    append('ON DELETE %s' % foreign_key.on_delete)
-        return ' '.join(result)
+                    append("ON DELETE %s" % foreign_key.on_delete)
+        return " ".join(result)
+
 
 class Constraint(DBObject):
-    def __init__(constraint, name, schema):
+    def __init__(constraint, name: str | None, schema: DBSchema) -> None:
         if name is not None:
             assert name not in schema.names
-            if name in schema.constraints: throw(DBSchemaError,
-                "Constraint with name %r already exists" % name)
+            if name in schema.constraints:
+                throw(DBSchemaError, "Constraint with name %r already exists" % name)
             schema.names[name] = constraint
             schema.constraints[name] = constraint
         constraint.schema = schema
         constraint.name = name
 
+
 class DBIndex(Constraint):
-    typename = 'Index'
-    def __init__(index, name, table, columns, is_pk=False, is_unique=None):
+    typename: ClassVar[str] = "Index"
+
+    def __init__(
+        index,
+        name: str | None,
+        table: Table,
+        columns: Sequence[Column],
+        is_pk: bool = False,
+        is_unique: bool | None = None,
+    ) -> None:
         assert len(columns) > 0
         for column in columns:
-            if column.table is not table: throw(DBSchemaError,
-                "Column %r does not belong to table %r and cannot be part of its index"
-                % (column.name, table.name))
+            if column.table is not table:
+                throw(
+                    DBSchemaError,
+                    "Column %r does not belong to table %r and cannot be part of its index"
+                    % (column.name, table.name),
+                )
         if columns in table.indexes:
-            if len(columns) == 1: throw(DBSchemaError, "Index for column %r already exists" % columns[0].name)
-            else: throw(DBSchemaError, "Index for columns (%s) already exists" % ', '.join(repr(column.name) for column in columns))
+            if len(columns) == 1:
+                throw(
+                    DBSchemaError,
+                    "Index for column %r already exists" % columns[0].name,
+                )
+            else:
+                throw(
+                    DBSchemaError,
+                    "Index for columns (%s) already exists"
+                    % ", ".join(repr(column.name) for column in columns),
+                )
+        is_pk = bool(is_pk)
         if is_pk:
-            if table.pk_index is not None: throw(DBSchemaError,
-                'Primary key for table %r is already defined' % table.name)
+            if table.pk_index is not None:
+                throw(
+                    DBSchemaError,
+                    "Primary key for table %r is already defined" % table.name,
+                )
             table.pk_index = index
-            if is_unique is None: is_unique = True
-            elif not is_unique: throw(DBSchemaError,
-                "Incompatible combination of is_unique=False and is_pk=True")
-        elif is_unique is None: is_unique = False
+            if is_unique is None:
+                is_unique = True
+            elif not is_unique:
+                throw(
+                    DBSchemaError,
+                    "Incompatible combination of is_unique=False and is_pk=True",
+                )
+        elif is_unique is None:
+            is_unique = False
         schema = table.schema
         if name is not None and name in schema.names:
-            throw(DBSchemaError, 'Index %s cannot be created, name is already in use' % name)
+            throw(
+                DBSchemaError,
+                "Index %s cannot be created, name is already in use" % name,
+            )
         Constraint.__init__(index, name, schema)
         for column in columns:
             column.is_pk = column.is_pk or (len(columns) == 1 and is_pk)
@@ -303,62 +545,117 @@ class DBIndex(Constraint):
         index.columns = columns
         index.is_pk = is_pk
         index.is_unique = is_unique
-    def exists(index, provider, connection, case_sensitive=True):
-        return provider.index_exists(connection, index.table.name, index.name, case_sensitive)
-    def get_sql(index):
+
+    def exists(
+        index,
+        provider: DBAPIProvider,
+        connection: DbConnection,
+        case_sensitive: bool = True,
+    ) -> str | None:
+        return provider.index_exists(
+            connection, index.table.name, index.name, case_sensitive
+        )
+
+    def get_sql(index) -> str:
         return index._get_create_sql(inside_table=True)
-    def get_create_command(index):
+
+    def get_create_command(index) -> str:
         return index._get_create_sql(inside_table=False)
-    def _get_create_sql(index, inside_table):
+
+    def _get_create_sql(index, inside_table: bool) -> str:
         schema = index.schema
         case = schema.case
         quote_name = schema.provider.quote_name
         cmd = []
         append = cmd.append
         if not inside_table:
-            if index.is_pk: throw(DBSchemaError,
-                'Primary key index cannot be defined outside of table definition')
-            append(case('CREATE'))
-            if index.is_unique: append(case('UNIQUE'))
-            append(case('INDEX'))
+            if index.is_pk:
+                throw(
+                    DBSchemaError,
+                    "Primary key index cannot be defined outside of table definition",
+                )
+            append(case("CREATE"))
+            if index.is_unique:
+                append(case("UNIQUE"))
+            append(case("INDEX"))
             # if schema.provider.index_if_not_exists_syntax:
             #     append(case('IF NOT EXISTS'))
             append(quote_name(index.name))
-            append(case('ON'))
+            append(case("ON"))
             append(quote_name(index.table.name))
             converter = index.columns[0].converter
-            if isinstance(converter.py_type, core.Array) and converter.provider.dialect == 'PostgreSQL':
-                append(case('USING GIN'))
+            if (
+                isinstance(converter.py_type, core.Array)
+                and converter.provider.dialect == "PostgreSQL"
+            ):
+                append(case("USING GIN"))
         else:
             if index.name:
-                append(case('CONSTRAINT'))
+                append(case("CONSTRAINT"))
                 append(quote_name(index.name))
-            if index.is_pk: append(case('PRIMARY KEY'))
-            elif index.is_unique: append(case('UNIQUE'))
-            else: append(case('INDEX'))
+            if index.is_pk:
+                append(case("PRIMARY KEY"))
+            elif index.is_unique:
+                append(case("UNIQUE"))
+            else:
+                append(case("INDEX"))
         append(schema.column_list(index.columns))
-        return ' '.join(cmd)
+        return " ".join(cmd)
+
 
 class ForeignKey(Constraint):
-    typename = 'Foreign key'
-    def __init__(foreign_key, name, child_table, child_columns, parent_table, parent_columns, index_name, on_delete,
-                 interleave=False):
+    typename: ClassVar[str] = "Foreign key"
+
+    def __init__(
+        foreign_key,
+        name: str,
+        child_table: Table,
+        child_columns: tuple[Column, ...],
+        parent_table: Table,
+        parent_columns: tuple[Column, ...],
+        index_name: bool | None,
+        on_delete: str | None,
+        interleave: bool | None = False,
+    ) -> None:
         schema = parent_table.schema
-        if schema is not child_table.schema: throw(DBSchemaError,
-            'Parent and child tables of foreign_key cannot belong to different schemata')
+        if schema is not child_table.schema:
+            throw(
+                DBSchemaError,
+                "Parent and child tables of foreign_key cannot belong to different schemata",
+            )
         for column in parent_columns:
-            if column.table is not parent_table: throw(DBSchemaError,
-                'Column %r does not belong to table %r' % (column.name, parent_table.name))
+            if column.table is not parent_table:
+                throw(
+                    DBSchemaError,
+                    "Column %r does not belong to table %r"
+                    % (column.name, parent_table.name),
+                )
         for column in child_columns:
-            if column.table is not child_table: throw(DBSchemaError,
-                'Column %r does not belong to table %r' % (column.name, child_table.name))
-        if len(parent_columns) != len(child_columns): throw(DBSchemaError,
-            'Foreign key columns count do not match')
+            if column.table is not child_table:
+                throw(
+                    DBSchemaError,
+                    "Column %r does not belong to table %r"
+                    % (column.name, child_table.name),
+                )
+        if len(parent_columns) != len(child_columns):
+            throw(DBSchemaError, "Foreign key columns count do not match")
         if child_columns in child_table.foreign_keys:
-            if len(child_columns) == 1: throw(DBSchemaError, 'Foreign key for column %r already defined' % child_columns[0].name)
-            else: throw(DBSchemaError, 'Foreign key for columns (%s) already defined' % ', '.join(repr(column.name) for column in child_columns))
+            if len(child_columns) == 1:
+                throw(
+                    DBSchemaError,
+                    "Foreign key for column %r already defined" % child_columns[0].name,
+                )
+            else:
+                throw(
+                    DBSchemaError,
+                    "Foreign key for columns (%s) already defined"
+                    % ", ".join(repr(column.name) for column in child_columns),
+                )
         if name is not None and name in schema.names:
-            throw(DBSchemaError, 'Foreign key %s cannot be created, name is already in use' % name)
+            throw(
+                DBSchemaError,
+                "Foreign key %s cannot be created, name is already in use" % name,
+            )
         Constraint.__init__(foreign_key, name, schema)
         child_table.foreign_keys[child_columns] = foreign_key
         if child_table is not parent_table:
@@ -373,37 +670,51 @@ class ForeignKey(Constraint):
 
         if index_name is not False:
             child_columns_len = len(child_columns)
-            if all(columns[:child_columns_len] != child_columns for columns in child_table.indexes):
-                child_table.add_index(index_name, child_columns, is_pk=False,
-                                      is_unique=False, m2m=bool(child_table.m2m))
+            if all(
+                columns[:child_columns_len] != child_columns
+                for columns in child_table.indexes
+            ):
+                child_table.add_index(
+                    index_name,
+                    child_columns,
+                    is_pk=False,
+                    is_unique=False,
+                    m2m=bool(child_table.m2m),
+                )
 
     def exists(foreign_key, provider, connection, case_sensitive=True):
-        return provider.fk_exists(connection, foreign_key.child_table.name, foreign_key.name, case_sensitive)
-    def get_sql(foreign_key):
+        return provider.fk_exists(
+            connection, foreign_key.child_table.name, foreign_key.name, case_sensitive
+        )
+
+    def get_sql(foreign_key) -> str:
         return foreign_key._get_create_sql(inside_table=True)
-    def get_create_command(foreign_key):
+
+    def get_create_command(foreign_key) -> str:
         return foreign_key._get_create_sql(inside_table=False)
-    def _get_create_sql(foreign_key, inside_table):
+
+    def _get_create_sql(foreign_key, inside_table: bool) -> str:
         schema = foreign_key.schema
         case = schema.case
         quote_name = schema.provider.quote_name
         cmd = []
         append = cmd.append
         if not inside_table:
-            append(case('ALTER TABLE'))
+            append(case("ALTER TABLE"))
             append(quote_name(foreign_key.child_table.name))
-            append(case('ADD'))
+            append(case("ADD"))
         if schema.named_foreign_keys and foreign_key.name:
-            append(case('CONSTRAINT'))
+            append(case("CONSTRAINT"))
             append(quote_name(foreign_key.name))
-        append(case('FOREIGN KEY'))
+        append(case("FOREIGN KEY"))
         append(schema.column_list(foreign_key.child_columns))
-        append(case('REFERENCES'))
+        append(case("REFERENCES"))
         append(quote_name(foreign_key.parent_table.name))
         append(schema.column_list(foreign_key.parent_columns))
         if foreign_key.on_delete:
-            append(case('ON DELETE %s' % foreign_key.on_delete))
-        return ' '.join(cmd)
+            append(case("ON DELETE %s" % foreign_key.on_delete))
+        return " ".join(cmd)
+
 
 DBSchema.table_class = Table
 DBSchema.column_class = Column

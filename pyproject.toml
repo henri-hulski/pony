@@ -1,0 +1,13 @@
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = 'pony/.*\.pyi?$'
+extend-exclude = '''
+(
+ orm/tests/
+ | orm/examples/
+ | orm/integration
+ | orm/dbproviders/*.PY
+ | flask/
+)
+'''

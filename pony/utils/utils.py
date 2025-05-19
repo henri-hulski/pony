@@ -1,4 +1,4 @@
-from __future__ import absolute_import, print_function
+from __future__ import absolute_import, annotations, print_function
 
 import ast, io, re, os.path, sys, inspect, types, warnings, pickle
 
@@ -8,104 +8,150 @@ from inspect import isfunction
 from time import strptime
 from collections import defaultdict
 from functools import update_wrapper, wraps
-from xml.etree import cElementTree
+from xml.etree import ElementTree
 from copy import deepcopy
 
 import pony
 from pony import options
 
 from pony.thirdparty.decorator import decorator as _decorator
+from collections.abc import Callable, Iterable
+from pony.orm.core import EntityProxy, OptAttrValue, Query, SetInstance
+from typing import Any, ClassVar, NoReturn, TypeVar, overload
+from typing_extensions import TypeAlias
 
-if pony.MODE.startswith('GAE-'): localbase = object
-else: from threading import local as localbase
+_T = TypeVar("_T")
+_KT = TypeVar("_KT")
+_VT = TypeVar("_VT")
+
+if pony.MODE.startswith("GAE-"):
+    localbase: TypeAlias = object
+else:
+    from threading import local as localbase  # type: ignore[no-redef]
 
 
 class PonyDeprecationWarning(DeprecationWarning):
     pass
 
-def deprecated(stacklevel, message):
+
+def deprecated(stacklevel: int, message: str) -> None:
     warnings.warn(message, PonyDeprecationWarning, stacklevel)
 
-warnings.simplefilter('once', PonyDeprecationWarning)
+
+warnings.simplefilter("once", PonyDeprecationWarning)
+
 
 def _improved_decorator(caller, func):
     if isfunction(func):
         return _decorator(caller, func)
+
     def pony_wrapper(*args, **kwargs):
         return caller(func, *args, **kwargs)
+
     return pony_wrapper
 
-def decorator(caller, func=None):
+
+def decorator(caller: Callable, func: Callable | None = None) -> Callable:
     if func is not None:
         return _improved_decorator(caller, func)
+
     def new_decorator(func):
         return _improved_decorator(caller, func)
+
     if isfunction(caller):
         update_wrapper(new_decorator, caller)
     return new_decorator
+
 
 def decorator_with_params(dec):
     def parameterized_decorator(*args, **kwargs):
         if len(args) == 1 and isfunction(args[0]) and not kwargs:
             return decorator(dec(), args[0])
         return decorator(dec(*args, **kwargs))
+
     return parameterized_decorator
 
+
 @decorator
-def cut_traceback(func, *args, **kwargs):
+def cut_traceback(func, *args, **kwargs):  # type: ignore[no-redef]
     if not options.CUT_TRACEBACK:
         return func(*args, **kwargs)
 
-    try: return func(*args, **kwargs)
-    except AssertionError: raise
+    try:
+        return func(*args, **kwargs)
+    except AssertionError:
+        raise
     except Exception:
         exc_type, exc, tb = sys.exc_info()
         full_tb = tb
         last_pony_tb = None
         try:
+            assert tb is not None
             while tb.tb_next:
-                module_name = tb.tb_frame.f_globals['__name__']
-                if module_name == 'pony' or (module_name is not None  # may be None during import
-                                             and module_name.startswith('pony.')):
+                module_name = tb.tb_frame.f_globals["__name__"]
+                if module_name == "pony" or (
+                    module_name is not None  # may be None during import
+                    and module_name.startswith("pony.")
+                ):
                     last_pony_tb = tb
                 tb = tb.tb_next
-            if last_pony_tb is None: raise
-            module_name = tb.tb_frame.f_globals.get('__name__') or ''
-            if module_name.startswith('pony.utils') and tb.tb_frame.f_code.co_name == 'throw':
+            if last_pony_tb is None:
+                raise
+            module_name = tb.tb_frame.f_globals.get("__name__") or ""
+            if (
+                module_name.startswith("pony.utils")
+                and tb.tb_frame.f_code.co_name == "throw"
+            ):
                 reraise(exc_type, exc, last_pony_tb)
             reraise(exc_type, exc, full_tb)
         finally:
             del exc, full_tb, tb, last_pony_tb
 
-cut_traceback_depth = 2
 
-if pony.MODE != 'INTERACTIVE':
+cut_traceback_depth: int = 2
+
+if pony.MODE != "INTERACTIVE":
     cut_traceback_depth = 0
-    def cut_traceback(func):
+
+    def cut_traceback(func: Callable) -> Callable:
         return func
 
-def reraise(exc_type, exc, tb):
-    try: raise exc.with_traceback(tb)
-    finally: del exc, tb
 
-def throw(exc_type, *args, **kwargs):
+def reraise(
+    exc_type: type[BaseException] | None,
+    exc: BaseException | None,
+    tb: types.TracebackType | None,
+) -> NoReturn:
+    try:
+        assert exc is not None
+        raise exc.with_traceback(tb)
+    finally:
+        del exc, tb
+
+
+def throw(exc_type: type[Exception] | Exception, *args, **kwargs) -> NoReturn:
     if isinstance(exc_type, Exception):
         assert not args and not kwargs
         exc = exc_type
-    else: exc = exc_type(*args, **kwargs)
+    else:
+        exc = exc_type(*args, **kwargs)
     exc.__cause__ = None
     try:
-        if not (pony.MODE == 'INTERACTIVE' and options.CUT_TRACEBACK):
+        if not (pony.MODE == "INTERACTIVE" and options.CUT_TRACEBACK):
             raise exc
         else:
             raise exc  # Set "pony.options.CUT_TRACEBACK = False" to see full traceback
-    finally: del exc
+    finally:
+        del exc
 
-def truncate_repr(s, max_len=100):
+
+def truncate_repr(s: object, max_len: int = 100) -> str:
     s = repr(s)
-    return s if len(s) <= max_len else s[:max_len-3] + '...'
+    return s if len(s) <= max_len else s[: max_len - 3] + "..."
+
 
 codeobjects = {}
+
 
 def get_codeobject_id(codeobject):
     codeobject_id = id(codeobject)
@@ -113,21 +159,25 @@ def get_codeobject_id(codeobject):
         codeobjects[codeobject_id] = codeobject
     return codeobject_id
 
+
 lambda_args_cache = {}
 
-def get_lambda_args(func):
+
+def get_lambda_args(func: Callable | ast.Lambda) -> list[str]:
     if type(func) is types.FunctionType:
         codeobject = func.__code__
         cache_key = get_codeobject_id(codeobject)
     elif isinstance(func, ast.Lambda):
         cache_key = func
-    else: assert False  # pragma: no cover
+    else:
+        assert False  # pragma: no cover
 
     names = lambda_args_cache.get(cache_key)
-    if names is not None: return names
+    if names is not None:
+        return names
 
     if type(func) is types.FunctionType:
-        if hasattr(inspect, 'signature'):
+        if hasattr(inspect, "signature"):
             names, argsname, kwname, defaults = [], None, None, []
             for p in inspect.signature(func).parameters.values():
                 if p.default is not p.empty:
@@ -140,10 +190,17 @@ def get_lambda_args(func):
                 elif p.kind == p.VAR_KEYWORD:
                     kwname = p.name
                 elif p.kind == p.POSITIONAL_ONLY:
-                    throw(TypeError, 'Positional-only arguments like %s are not supported' % p.name)
+                    throw(
+                        TypeError,
+                        "Positional-only arguments like %s are not supported" % p.name,
+                    )
                 elif p.kind == p.KEYWORD_ONLY:
-                    throw(TypeError, 'Keyword-only arguments like %s are not supported' % p.name)
-                else: assert False
+                    throw(
+                        TypeError,
+                        "Keyword-only arguments like %s are not supported" % p.name,
+                    )
+                else:
+                    assert False
         else:
             names, argsname, kwname, defaults = inspect.getargspec(func)
     elif isinstance(func, ast.Lambda):
@@ -151,259 +208,385 @@ def get_lambda_args(func):
         kwname = func.args.kwarg
         defaults = func.args.defaults + func.args.kw_defaults
         names = [arg.arg for arg in func.args.args]
-    else: assert False  # pragma: no cover
-    if argsname: throw(TypeError, '*%s is not supported' % argsname)
-    if kwname: throw(TypeError, '**%s is not supported' % kwname)
-    if defaults: throw(TypeError, 'Defaults are not supported')
+    else:
+        assert False  # pragma: no cover
+    if argsname:
+        throw(TypeError, "*%s is not supported" % argsname)
+    if kwname:
+        throw(TypeError, "**%s is not supported" % kwname)
+    if defaults:
+        throw(TypeError, "Defaults are not supported")
 
     lambda_args_cache[cache_key] = names
     return names
 
+
 def error_method(*args, **kwargs):
     raise TypeError()
 
-_ident_re = re.compile(r'^[A-Za-z_]\w*\Z')
+
+_ident_re = re.compile(r"^[A-Za-z_]\w*\Z")
+
 
 # is_ident = ident_re.match
-def is_ident(string):
-    'is_ident(string) -> bool'
+def is_ident(string: str) -> bool:
+    "is_ident(string) -> bool"
     return bool(_ident_re.match(string))
 
-_name_parts_re = re.compile(r'''
+
+_name_parts_re = re.compile(
+    r"""
             [A-Z][A-Z0-9]+(?![a-z]) # ACRONYM
         |   [A-Z][a-z]*             # Capitalized or single capital
         |   [a-z]+                  # all-lowercase
         |   [0-9]+                  # numbers
         |   _+                      # underscores
-        ''', re.VERBOSE)
+        """,
+    re.VERBOSE,
+)
+
 
 def split_name(name):
     "split_name('Some_FUNNYName') -> ['Some', 'FUNNY', 'Name']"
     if not _ident_re.match(name):
-        raise ValueError('Name is not correct Python identifier')
+        raise ValueError("Name is not correct Python identifier")
     list = _name_parts_re.findall(name)
-    if not (list[0].strip('_') and list[-1].strip('_')):
-        raise ValueError('Name must not starting or ending with underscores')
-    return [ s for s in list if s.strip('_') ]
+    if not (list[0].strip("_") and list[-1].strip("_")):
+        raise ValueError("Name must not starting or ending with underscores")
+    return [s for s in list if s.strip("_")]
+
 
 def uppercase_name(name):
     "uppercase_name('Some_FUNNYName') -> 'SOME_FUNNY_NAME'"
-    return '_'.join(s.upper() for s in split_name(name))
+    return "_".join(s.upper() for s in split_name(name))
+
 
 def lowercase_name(name):
     "uppercase_name('Some_FUNNYName') -> 'some_funny_name'"
-    return '_'.join(s.lower() for s in split_name(name))
+    return "_".join(s.lower() for s in split_name(name))
+
 
 def camelcase_name(name):
     "uppercase_name('Some_FUNNYName') -> 'SomeFunnyName'"
-    return ''.join(s.capitalize() for s in split_name(name))
+    return "".join(s.capitalize() for s in split_name(name))
+
 
 def mixedcase_name(name):
     "mixedcase_name('Some_FUNNYName') -> 'someFunnyName'"
     list = split_name(name)
-    return list[0].lower() + ''.join(s.capitalize() for s in list[1:])
+    return list[0].lower() + "".join(s.capitalize() for s in list[1:])
 
-def import_module(name):
+
+def import_module(name: str) -> types.ModuleType:
     "import_module('a.b.c') -> <module a.b.c>"
     mod = sys.modules.get(name)
-    if mod is not None: return mod
+    if mod is not None:
+        return mod
     mod = __import__(name)
-    components = name.split('.')
-    for comp in components[1:]: mod = getattr(mod, comp)
+    components = name.split(".")
+    for comp in components[1:]:
+        mod = getattr(mod, comp)
     return mod
 
-if sys.platform == 'win32':
-      _absolute_re = re.compile(r'^(?:[A-Za-z]:)?[\\/]')
-else: _absolute_re = re.compile(r'^/')
+
+if sys.platform == "win32":
+    _absolute_re = re.compile(r"^(?:[A-Za-z]:)?[\\/]")
+else:
+    _absolute_re = re.compile(r"^/")
+
 
 def is_absolute_path(filename):
     return bool(_absolute_re.match(filename))
 
+
 def absolutize_path(filename, frame_depth):
-    if is_absolute_path(filename): return filename
-    code_filename = sys._getframe(frame_depth+1).f_code.co_filename
+    if is_absolute_path(filename):
+        return filename
+    code_filename = sys._getframe(frame_depth + 1).f_code.co_filename
     if not is_absolute_path(code_filename):
-        if code_filename.startswith('<') and code_filename.endswith('>'):
-            if pony.MODE == 'INTERACTIVE': raise ValueError(
-                'When in interactive mode, please provide absolute file path. Got: %r' % filename)
-            raise EnvironmentError('Unexpected module filename, which is not absolute file path: %r' % code_filename)
+        if code_filename.startswith("<") and code_filename.endswith(">"):
+            if pony.MODE == "INTERACTIVE":
+                raise ValueError(
+                    "When in interactive mode, please provide absolute file path. Got: %r"
+                    % filename
+                )
+            raise EnvironmentError(
+                "Unexpected module filename, which is not absolute file path: %r"
+                % code_filename
+            )
     code_path = os.path.dirname(code_filename)
     return os.path.join(code_path, filename)
+
 
 def current_timestamp():
     return datetime2timestamp(datetime.now())
 
-def datetime2timestamp(d):
-    result = d.isoformat(' ')
-    if len(result) == 19: return result + '.000000'
+
+def datetime2timestamp(d: datetime) -> str:
+    result = d.isoformat(" ")
+    if len(result) == 19:
+        return result + ".000000"
     return result
 
-def timestamp2datetime(t):
-    time_tuple = strptime(t[:19], '%Y-%m-%d %H:%M:%S')
-    microseconds = int((t[20:26] + '000000')[:6])
+
+def timestamp2datetime(t: str) -> datetime:
+    time_tuple = strptime(t[:19], "%Y-%m-%d %H:%M:%S")
+    microseconds = int((t[20:26] + "000000")[:6])
     return datetime(*(time_tuple[:6] + (microseconds,)))
 
-expr1_re = re.compile(r'''
+
+expr1_re = re.compile(
+    r"""
         ([A-Za-z_]\w*)  # identifier (group 1)
     |   ([(])           # open parenthesis (group 2)
-    ''', re.VERBOSE)
+    """,
+    re.VERBOSE,
+)
 
-expr2_re = re.compile(r'''
+expr2_re = re.compile(
+    r"""
      \s*(?:
             (;)                 # semicolon (group 1)
         |   (\.\s*[A-Za-z_]\w*) # dot + identifier (group 2)
         |   ([([])              # open parenthesis or braces (group 3)
         )
-    ''', re.VERBOSE)
+    """,
+    re.VERBOSE,
+)
 
-expr3_re = re.compile(r"""
+expr3_re = re.compile(
+    r"""
         [()[\]]                   # parenthesis or braces (group 1)
     |   '''(?:[^\\]|\\.)*?'''     # '''triple-quoted string'''
-    |   \"""(?:[^\\]|\\.)*?\"""   # \"""triple-quoted string\"""
+    |   \"""(?:[^\\]|\\.)*?\"""   # "\""triple-quoted string"\""
     |   '(?:[^'\\]|\\.)*?'        # 'string'
     |   "(?:[^"\\]|\\.)*?"        # "string"
-    """, re.VERBOSE)
+    """,
+    re.VERBOSE,
+)
 
-def parse_expr(s, pos=0):
+
+def parse_expr(s: str, pos: int = 0) -> tuple[str, bool]:
     z = 0
     match = expr1_re.match(s, pos)
-    if match is None: raise ValueError()
+    if match is None:
+        raise ValueError()
     start = pos
     i = match.lastindex
-    if i == 1: pos = match.end()  # identifier
-    elif i == 2: z = 2  # "("
-    else: assert False  # pragma: no cover
+    if i == 1:
+        pos = match.end()  # identifier
+    elif i == 2:
+        z = 2  # "("
+    else:
+        assert False  # pragma: no cover
     while True:
         match = expr2_re.match(s, pos)
-        if match is None: return s[start:pos], z==1
+        if match is None:
+            return s[start:pos], z == 1
         pos = match.end()
         i = match.lastindex
-        if i == 1: return s[start:pos], False  # ";" - explicit end of expression
-        elif i == 2: z = 2  # .identifier
+        if i == 1:
+            return s[start:pos], False  # ";" - explicit end of expression
+        elif i == 2:
+            z = 2  # .identifier
         elif i == 3:  # "(" or "["
             pos = match.end()
             counter = 1
             open = match.group(i)
-            if open == '(': close = ')'
-            elif open == '[': close = ']'; z = 2
-            else: assert False  # pragma: no cover
+            if open == "(":
+                close = ")"
+            elif open == "[":
+                close = "]"
+                z = 2
+            else:
+                assert False  # pragma: no cover
             while True:
                 match = expr3_re.search(s, pos)
-                if match is None: raise ValueError()
+                if match is None:
+                    raise ValueError()
                 pos = match.end()
                 x = match.group()
-                if x == open: counter += 1
+                if x == open:
+                    counter += 1
                 elif x == close:
                     counter -= 1
-                    if not counter: z += 1; break
-        else: assert False  # pragma: no cover
+                    if not counter:
+                        z += 1
+                        break
+        else:
+            assert False  # pragma: no cover
 
-def tostring(x):
-    if isinstance(x, str): return x
-    if hasattr(x, '__unicode__'):
-        try: return str(x)
-        except: pass
-    if hasattr(x, 'makeelement'): return cElementTree.tostring(x)
-    try: return str(x)
-    except: pass
-    try: return repr(x)
-    except: pass
-    if type(x) == types.InstanceType: return '<%s instance at 0x%X>' % (x.__class__.__name__)
-    return '<%s object at 0x%X>' % (x.__class__.__name__)
 
-def strjoin(sep, strings, source_encoding='ascii', dest_encoding=None):
+def tostring(x: str | bytes | ElementTree.Element) -> str:
+    if isinstance(x, str):
+        return x
+    if hasattr(x, "__unicode__"):
+        try:
+            return str(x)
+        except:
+            pass
+    if hasattr(x, "makeelement"):
+        assert isinstance(x, ElementTree.Element)
+        return str(ElementTree.tostring(x))
+    try:
+        return str(x)
+    except:
+        pass
+    try:
+        return repr(x)
+    except:
+        pass
+    if type(x) == types.InstanceType:  # type: ignore # not available in Python 3
+        return "<%s instance at 0x%X>" % (x.__class__.__name__)
+    return "<%s object at 0x%X>" % (x.__class__.__name__)
+
+
+@overload
+def strjoin(
+    sep: str,
+    strings: Iterable[str],
+    source_encoding: str = "ascii",
+    dest_encoding: None = None,
+) -> str: ...
+@overload
+def strjoin(
+    sep: str,
+    strings: Iterable[str],
+    source_encoding: str = "ascii",
+    *,
+    dest_encoding: str,
+) -> bytes: ...
+def strjoin(sep, strings, source_encoding="ascii", dest_encoding=None):
     "Can join mix of str and byte strings in different encodings"
     strings = list(strings)
-    try: return sep.join(strings)
-    except UnicodeDecodeError: pass
+    try:
+        return sep.join(strings)
+    except UnicodeDecodeError:
+        pass
     for i, s in enumerate(strings):
-        if isinstance(s, str):
-            strings[i] = s.decode(source_encoding, 'replace').replace(u'\ufffd', '?')
+        if isinstance(s, bytes):
+            strings[i] = s.decode(source_encoding, "replace").replace("\ufffd", "?")
     result = sep.join(strings)
-    if dest_encoding is None: return result
-    return result.encode(dest_encoding, 'replace')
+    if dest_encoding is None:
+        return result
+    return result.encode(dest_encoding, "replace")
 
+
+@overload
+def count() -> _count[int]: ...
+@overload
+def count(args: tuple, kwargs: dict) -> _count: ...
+@overload
+def count(args: tuple) -> _count: ...
+@overload
+def count(arg: Iterable | SetInstance | Query) -> int: ...
 def count(*args, **kwargs):
-    if kwargs: return _count(*args, **kwargs)
-    if len(args) != 1: return _count(*args)
+    if kwargs:
+        return _count(*args, **kwargs)
+    if len(args) != 1:
+        return _count(*args)
     arg = args[0]
-    if hasattr(arg, 'count'): return arg.count()
-    try: it = iter(arg)
-    except TypeError: return _count(arg)
+    if hasattr(arg, "count"):
+        return arg.count()
+    try:
+        it = iter(arg)
+    except TypeError:
+        return _count(arg)
     return len(set(it))
 
-def avg(iter):
+
+def avg(iter: Iterable[float]) -> float | None:
     count = 0
     sum = 0.0
     for elem in iter:
-        if elem is None: continue
+        if elem is None:
+            continue
         sum += elem
         count += 1
-    if not count: return None
+    if not count:
+        return None
     return sum / count
 
-def group_concat(items, sep=','):
+
+def group_concat(items: Iterable | None, sep: str = ",") -> str | None:
     if items is None:
         return None
     return str(sep).join(str(item) for item in items)
 
-def coalesce(*args):
+
+def coalesce(*args) -> OptAttrValue:
     for arg in args:
         if arg is not None:
             return arg
     return None
 
-def distinct(iter):
+
+def distinct(iter: Iterable[_T]) -> defaultdict[_T, int]:
     d = defaultdict(int)
     for item in iter:
         d[item] = d[item] + 1
     return d
 
-def concat(*args):
-    return ''.join(tostring(arg) for arg in args)
 
-def between(x, a, b):
+def concat(*args) -> str:
+    return "".join(tostring(arg) for arg in args)
+
+
+def between(x: Any, a: Any, b: Any) -> bool:
     return a <= x <= b
 
-def is_utf8(encoding):
-    return encoding.upper().replace('_', '').replace('-', '') in ('UTF8', 'UTF', 'U8')
+
+def is_utf8(encoding: str) -> bool:
+    return encoding.upper().replace("_", "").replace("-", "") in ("UTF8", "UTF", "U8")
+
 
 def _persistent_id(obj):
     if obj is Ellipsis:
         return "Ellipsis"
+
 
 def _persistent_load(persid):
     if persid == "Ellipsis":
         return Ellipsis
     raise pickle.UnpicklingError("unsupported persistent object")
 
-def pickle_ast(val):
+
+def pickle_ast(val: ast.expr) -> io.BytesIO:
     pickled = io.BytesIO()
     pickler = pickle.Pickler(pickled)
     pickler.persistent_id = _persistent_id
     pickler.dump(val)
     return pickled
 
-def unpickle_ast(pickled):
+
+def unpickle_ast(pickled: io.BytesIO) -> ast.expr:
     pickled.seek(0)
     unpickler = pickle.Unpickler(pickled)
     unpickler.persistent_load = _persistent_load
     return unpickler.load()
 
-def copy_ast(tree):
+
+def copy_ast(tree: ast.expr) -> ast.expr:
     return unpickle_ast(pickle_ast(tree))
 
-def _hashable_wrap(func):
-    @wraps(func, assigned=('__name__', '__doc__'))
+
+def _hashable_wrap(func: Callable) -> Callable:
+    @wraps(func, assigned=("__name__", "__doc__"))
     def new_func(self, *args, **kwargs):
-        if getattr(self, '_hash', None) is not None:
-            assert False, 'Cannot mutate HashableDict instance after the hash value is calculated'
+        if getattr(self, "_hash", None) is not None:
+            assert (
+                False
+            ), "Cannot mutate HashableDict instance after the hash value is calculated"
         return func(self, *args, **kwargs)
+
     return new_func
 
-class HashableDict(dict):
-    def __hash__(self):
-        result = getattr(self, '_hash', None)
+
+class HashableDict(dict[_KT, _VT]):
+    _hash: int
+
+    def __hash__(self) -> int:  # type: ignore[override]
+        result = getattr(self, "_hash", None)
         if result is None:
             result = 0
             for key, value in self.items():
@@ -411,31 +594,36 @@ class HashableDict(dict):
                 result ^= hash(value)
             self._hash = result
         return result
-    def __deepcopy__(self, memo):
-        if getattr(self, '_hash', None) is not None:
-            return self
-        return HashableDict({deepcopy(key, memo): deepcopy(value, memo)
-                            for key, value in self.items()})
-    __setitem__ = _hashable_wrap(dict.__setitem__)
-    __delitem__ = _hashable_wrap(dict.__delitem__)
-    clear = _hashable_wrap(dict.clear)
-    pop = _hashable_wrap(dict.pop)
-    popitem = _hashable_wrap(dict.popitem)
-    setdefault = _hashable_wrap(dict.setdefault)
-    update = _hashable_wrap(dict.update)
 
-def deref_proxy(value):
+    def __deepcopy__(self, memo: dict[int, object]) -> HashableDict[_KT, _VT]:
+        if getattr(self, "_hash", None) is not None:
+            return self
+        return HashableDict(
+            {deepcopy(key, memo): deepcopy(value, memo) for key, value in self.items()}
+        )
+
+    __setitem__: ClassVar[Callable] = _hashable_wrap(dict.__setitem__)
+    __delitem__: ClassVar[Callable] = _hashable_wrap(dict.__delitem__)
+    clear: ClassVar[Callable] = _hashable_wrap(dict.clear)
+    pop: ClassVar[Callable] = _hashable_wrap(dict.pop)
+    popitem: ClassVar[Callable] = _hashable_wrap(dict.popitem)
+    setdefault: ClassVar[Callable] = _hashable_wrap(dict.setdefault)
+    update: ClassVar[Callable] = _hashable_wrap(dict.update)
+
+
+def deref_proxy(value: EntityProxy | Any) -> Any:
     t = type(value)
-    if t.__name__ == 'LocalProxy' and '_get_current_object' in t.__dict__:
+    if t.__name__ == "LocalProxy" and "_get_current_object" in t.__dict__:
         # Flask local proxy
         value = value._get_current_object()
-    elif t.__name__ == 'EntityProxy':
+    elif t.__name__ == "EntityProxy":
         # Pony proxy
         value = value._get_object()
 
     return value
 
-def deduplicate(value, deduplication_cache):
+
+def deduplicate(value: _T, deduplication_cache: dict[type[_T], dict[_T, _T]]) -> _T:
     t = type(value)
     try:
         return deduplication_cache[t].setdefault(value, value)
