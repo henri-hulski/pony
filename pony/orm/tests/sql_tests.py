@@ -45,6 +45,7 @@ def do_test(provider_name, raw_server_version):
     testutils.TestDatabase.real_provider_name = provider_name
     testutils.TestDatabase.raw_server_version = raw_server_version
     core.Database = orm.Database = testutils.TestDatabase
+    assert module_name is not None
     sys.modules.pop(module_name, None)
     try: __import__(module_name)
     except ImportError as e:
@@ -92,6 +93,7 @@ def orphan_lines(lines):
     lines[:] = []
 
 statement_used = True
+directive_param = None
 for raw_line in open(queries_fname):
     line = raw_line.strip()
     if not line: continue
@@ -105,7 +107,6 @@ for raw_line in open(queries_fname):
         directive = eval(match.group(1))
         if match.group(2):
             directive_param = match.group(2)
-        else: directive_param = None
     elif line.startswith('>>> '):
         if directive:
             directive(directive_param)

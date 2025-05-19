@@ -43,7 +43,7 @@ class Person(db.Entity):
 
     @property
     def incorrect_full_name(self):
-        return self.first_name + ' ' + p.last_name  # p is FakePerson instance here
+        return self.first_name + ' ' + p.last_name  #type:ignore # p is FakePerson instance here
 
     @classmethod
     def find_by_full_name(cls, full_name):
@@ -59,11 +59,11 @@ class Person(db.Entity):
         return self.complex_method()
 
     def method_without_return(self):
-        self.first_name == 'Alexander'
+        assert self.first_name == 'Alexander'
 
     @property
     def property_without_return(self):
-        self.first_name == 'Alexander'
+        assert self.first_name == 'Alexander'
 
     def method_with_incorrect_attr_reference(self):
         return self.foobar == 123
@@ -78,7 +78,7 @@ class FakePerson(object):
 
 
 p = FakePerson()
-p.last_name = '***'
+p.last_name = '***'  # type:ignore # last_name is not defined in FakePerson
 
 
 class Car(db.Entity):

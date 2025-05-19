@@ -56,7 +56,7 @@ def only_for(providers):
                     cls.__name__, ', '.join(providers), '' if len(providers) < 2 else 's'
                 ))
             if db_params['provider'] not in providers:
-                x.setUpClass = setUpClass
+                x.setUpClass = setUpClass  # type: ignore # not pony related
             result = x
         elif isinstance(x, types.FunctionType):
             def new_test_func(self):

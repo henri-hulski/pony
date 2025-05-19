@@ -80,7 +80,7 @@ class TestSQLTranslatorExceptions(unittest.TestCase):
     @raises_exception(ExprEvalError, "`1 in 2` raises TypeError: argument of type 'int' is not iterable" if not PYPY else
                                      "`1 in 2` raises TypeError: 'int' object is not iterable")
     def test6(self):
-        select(s for s in Student if 1 in 2)
+        select(s for s in Student if 1 in 2)  # type: ignore # error expected
     @raises_exception(NotImplementedError, 'Group[s.group.number]')
     def test7(self):
         select(s for s in Student if Group[s.group.number].dept.number == 44)
@@ -188,7 +188,7 @@ class TestSQLTranslatorExceptions(unittest.TestCase):
                       "`len(1, 2) == 3` raises TypeError: len() takes 1 positional argument but 2 were given" if PYPY else
                       "`len(1, 2) == 3` raises TypeError: len() takes exactly one argument (2 given)")
     def test40(self):
-        select(s for s in Student if len(1, 2) == 3)
+        select(s for s in Student if len(1, 2) == 3)  # type: ignore # error expected
     @raises_exception(TypeError, "Function sum() expects query or items of numeric type, got 'Student' in sum(s for s in Student if s.group == g)")
     def test41(self):
         select(g for g in Group if sum(s for s in Student if s.group == g) > 1)

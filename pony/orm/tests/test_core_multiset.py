@@ -10,23 +10,23 @@ db = Database()
 
 class Department(db.Entity):
     number = PrimaryKey(int)
-    groups = Set('Group')
-    courses = Set('Course')
+    groups: 'Set[Group]' = Set('Group')
+    courses: 'Set[Course]' = Set('Course')
 
 class Group(db.Entity):
     number = PrimaryKey(int)
     department = Required(Department)
-    students = Set('Student')
+    students: 'Set[Student]' = Set('Student')
 
 class Student(db.Entity):
     name = Required(str)
     group = Required(Group)
-    courses = Set('Course')
+    courses: 'Set[Course]' = Set('Course')
 
 class Course(db.Entity):
     name = PrimaryKey(str)
     department = Required(Department)
-    students = Set('Student')
+    students: 'Set[Student]' = Set('Student')
 
 
 class TestMultiset(unittest.TestCase):

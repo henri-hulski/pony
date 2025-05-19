@@ -57,7 +57,7 @@ class TestQuery(unittest.TestCase):
         self.assertEqual(set(g.students), set(students))
     @raises_exception(ExprEvalError, "`a` raises NameError: name 'a' is not defined")
     def test4(self):
-        select(a for s in Student)
+        select(a for s in Student)  # type: ignore # error expected
     @raises_exception(TypeError, "Incomparable types 'str' and 'StrArray' in expression: s.name == x")
     def test5(self):
         x = ['A']
@@ -181,7 +181,7 @@ class TestQuery(unittest.TestCase):
         def find_by_gpa():
             if False:
                 gpa = Decimal('3.1')
-            return lambda s: s.gpa > gpa
+            return lambda s: s.gpa > gpa  # type: ignore # error expected
         fn = find_by_gpa()
         students = list(Student.select(fn))
     def test_pickle(self):

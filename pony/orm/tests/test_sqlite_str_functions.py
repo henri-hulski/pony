@@ -29,17 +29,17 @@ with db_session:
 class TestUnicode(unittest.TestCase):
     @db_session
     def test1(self):
-        names = select(p.name for p in Person).order_by(lambda: p.id)[:]
+        names = select(p.name for p in Person).order_by(lambda: p.id)[:]  # type: ignore # deprecated syntax
         self.assertEqual(names, ['John', u'Иван'])
 
     @db_session
     def test2(self):
-        names = select(p.name.upper() for p in Person).order_by(lambda: p.id)[:]
+        names = select(p.name.upper() for p in Person).order_by(lambda: p.id)[:]  # type: ignore # deprecated syntax
         self.assertEqual(names, ['JOHN', u'ИВАН'])  # u'\u0418\u0412\u0410\u041d'
 
     @db_session
     def test3(self):
-        names = select(p.name.lower() for p in Person).order_by(lambda: p.id)[:]
+        names = select(p.name.lower() for p in Person).order_by(lambda: p.id)[:]  # type: ignore # deprecated syntax
         self.assertEqual(names, ['john', u'иван'])  # u'\u0438\u0432\u0430\u043d'
 
     @db_session

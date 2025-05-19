@@ -1,9 +1,10 @@
+import abc
 import unittest
 
 from pony.orm import *
 from pony.orm.tests import setup_database, teardown_database
 
-class EntityStatusTestCase(object):
+class EntityStatusTestCase(unittest.TestCase, abc.ABC):
     @classmethod
     def setUpClass(cls):
         db = cls.db = Database()
@@ -21,6 +22,7 @@ class EntityStatusTestCase(object):
     def tearDownClass(cls):
         teardown_database(cls.db)
 
+    @abc.abstractmethod
     def make_flush(self, obj=None):
         raise NotImplementedError
 
@@ -59,6 +61,7 @@ class EntityStatusTestCase_ObjectFlush(EntityStatusTestCase,
                                        unittest.TestCase):
 
     def make_flush(self, obj=None):
+        assert obj is not None
         obj.flush()
 
 

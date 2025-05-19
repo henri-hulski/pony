@@ -3,7 +3,7 @@ from __future__ import absolute_import, print_function, division
 import unittest
 
 from pony.orm.core import *
-from pony.orm.core import local
+from pony.orm.core import local, SessionCache
 from pony.orm.tests.testutils import *
 from pony.orm.tests import setup_database, teardown_database
 
@@ -58,12 +58,14 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test6(self):
         @db_session
         def f():
+            assert self.db is not None
             x = local.db_session
             self.assertTrue(x is not None)
 
             yield self.db._get_cache()
             self.assertEqual(local.db_session, x)
 
+            assert self.Account is not None
             a1 = self.Account[1]
             yield a1.amount
             self.assertEqual(local.db_session, x)
@@ -73,6 +75,7 @@ class TestGeneratorDbSession(unittest.TestCase):
 
         gen = f()
         cache = next(gen)
+        assert isinstance(cache, SessionCache)
         self.assertTrue(cache.is_alive)
         self.assertEqual(local.db_session, None)
 
@@ -93,6 +96,7 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test7(self):
         @db_session
         def f(id1):
+            assert self.Account is not None
             a1 = self.Account[id1]
             id2 = yield a1.amount
             a2 = self.Account[id2]
@@ -116,6 +120,7 @@ class TestGeneratorDbSession(unittest.TestCase):
         else:
             self.fail()
 
+        assert self.Account is not None
         with db_session:
             a1 = self.Account[1]
             self.assertEqual(a1.amount, 900)
@@ -126,6 +131,7 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test8(self):
         @db_session
         def f(id1):
+            assert self.Account is not None
             a1 = self.Account[id1]
             a1.amount += 100
             yield a1.amount
@@ -136,6 +142,7 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test9(self):
         @db_session
         def f(id1):
+            assert self.Account is not None
             a1 = self.Account[id1]
             a1.amount += 100
             commit()
@@ -147,10 +154,12 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test10(self):
         @db_session
         def f(id1):
+            assert self.Account is not None
             a1 = self.Account[id1]
             yield a1.amount
             a1.amount += 100
 
+        assert self.Account is not None
         with db_session:
             a = self.Account[1].amount
         for amount in f(1):
@@ -163,6 +172,7 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test12(self):
         @db_session
         def f(id1):
+            assert self.Account is not None
             a1 = self.Account[id1]
             yield a1.amount
 
@@ -174,6 +184,7 @@ class TestGeneratorDbSession(unittest.TestCase):
     def test13(self):
         @db_session
         def f(id1):
+            assert self.Account is not None
             a1 = self.Account[id1]
             yield a1.amount
 
