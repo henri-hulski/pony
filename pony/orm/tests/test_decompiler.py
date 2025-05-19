@@ -124,7 +124,7 @@ class TestDecompiler(unittest.TestCase):
 
     def assertDecompilesTo(self, src, expected):
         # skip test due to ast.dump has no indent parameter
-        if sys.version_info[:2] <= (3, 8):
+        if sys.version_info[:2] <= (3, 8):  # noqa: UP036
             return
 
         code = compile(src, "<?>", "eval").co_consts[0]
