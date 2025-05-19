@@ -102,6 +102,7 @@ packages = [
 ]
 
 package_data = {
+    'pony': ['py.typed'],
     'pony.flask.example': ['templates/*.html'],
     'pony.orm.tests': ['queries.txt']
 }
