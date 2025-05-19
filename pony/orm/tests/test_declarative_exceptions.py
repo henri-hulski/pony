@@ -97,7 +97,7 @@ class TestSQLTranslatorExceptions(unittest.TestCase):
         else "`1 in 2` raises TypeError: 'int' object is not iterable",
     )
     def test6(self):
-        select(s for s in Student if 1 in 2)
+        select(s for s in Student if 1 in 2)  # type: ignore # error expected
 
     @raises_exception(NotImplementedError, "Group[s.group.number]")
     def test7(self):
@@ -321,7 +321,7 @@ class TestSQLTranslatorExceptions(unittest.TestCase):
         else "`len(1, 2) == 3` raises TypeError: len() takes exactly one argument (2 given)",
     )
     def test40(self):
-        select(s for s in Student if len(1, 2) == 3)
+        select(s for s in Student if len(1, 2) == 3)  # type: ignore # error expected
 
     @raises_exception(
         TypeError,

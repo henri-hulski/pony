@@ -57,7 +57,7 @@ def only_for(providers):
         if isinstance(x, type) and issubclass(x, unittest.TestCase):
 
             @classmethod
-            def setUpClass(cls):
+            def setUpClass(cls) -> None:
                 raise unittest.SkipTest(
                     "%s tests implemented only for %s provider%s"
                     % (
@@ -68,8 +68,13 @@ def only_for(providers):
                 )
 
             if db_params["provider"] not in providers:
-                x.setUpClass = setUpClass
-            result = x
+                result = type(
+                    x.__name__,
+                    (x,),
+                    {"setUpClass": classmethod(setUpClass)},
+                )
+            else:
+                result = x
         elif isinstance(x, types.FunctionType):
 
             def new_test_func(self):

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import unittest
 
 from pony.orm.core import *
@@ -11,7 +13,7 @@ class TestDiag(unittest.TestCase):
     def test_entity_duplicate(self):
         db = Database()
 
-        class Entity1(db.Entity):
+        class Entity1(db.Entity):  # type: ignore # error expected
             id = PrimaryKey(int)
 
         class Entity1(db.Entity):
@@ -130,7 +132,7 @@ class TestDiag(unittest.TestCase):
 
         class Entity1(db.Entity):
             id = PrimaryKey(int)
-            attr1 = Set("Entity2")
+            attr1: Set[Entity2] = Set("Entity2")
 
         class Entity2(db.Entity):
             id = PrimaryKey(int)
