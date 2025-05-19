@@ -1,12 +1,41 @@
+from __future__ import annotations
+
 from binascii import hexlify
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any, ClassVar, Concatenate, Literal, TypeVar
+
+from typing_extensions import ParamSpec, Unpack
 
 from pony import options
 from pony.converting import timedelta2str
+from pony.orm.core import (
+    Adapter,
+    Attribute,
+    Entity,
+    OptAttrValue,
+    ParamKey,
+    QueryResult,
+    QueryVars,
+)
 from pony.orm.ormtypes import RawSQL
 from pony.py23compat import int_types
 from pony.utils import datetime2timestamp, is_ident, throw
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Sequence
+
+    import _typeshed
+
+    from pony.orm.dbapiprovider import (
+        Converter,
+        DBAPIProvider,
+        StrConverter,
+    )
+
+_T = TypeVar("_T", bound="str | Value | Param | Sequence")
+_PT = TypeVar("_PT", bound="Param")
+_P = ParamSpec("_P")
 
 
 class AstError(Exception):
@@ -14,30 +43,45 @@ class AstError(Exception):
 
 
 class Param:
-    __slots__ = "converter", "id", "optimistic", "paramkey", "style"
+    __slots__ = "style", "id", "paramkey", "converter", "optimistic"
+    style: str
+    id: int | None
+    paramkey: ParamKey
+    converter: Converter | None
+    optimistic: bool
 
-    def __init__(self, paramstyle, paramkey, converter=None, optimistic=False):
+    def __init__(
+        self,
+        paramstyle: str,
+        paramkey: ParamKey,
+        converter: Converter | None = None,
+        optimistic: bool = False,
+    ) -> None:
         self.style = paramstyle
         self.id = None
         self.paramkey = paramkey
         self.converter = converter
         self.optimistic = optimistic
 
-    def eval(self, values):
+    def eval(self, values: QueryVars) -> Any:
         varkey, i, j = self.paramkey
         value = values[varkey]
         if i is not None:
             t = type(value)
             if t is tuple:
+                assert isinstance(value, tuple)
                 value = value[i]
             elif t is RawSQL:
+                assert isinstance(value, RawSQL)
                 value = value.values[i]
             elif hasattr(value, "_get_items"):
+                assert isinstance(value, QueryResult)
                 value = value._get_items()[i]
             else:
                 assert False, t
         if j is not None:
             assert type(type(value)).__name__ == "EntityMeta"
+            assert isinstance(value, Entity)
             value = value._get_raw_pkval_()[j]
         converter = self.converter
         if value is not None and converter is not None:
@@ -66,16 +110,31 @@ class Param:
 
 
 class CompositeParam(Param):
-    __slots__ = "func", "items"
+    __slots__ = "items", "func"
 
-    def __init__(self, paramstyle, paramkey, items, func):
+    def __init__(
+        self,
+        paramstyle: str,
+        paramkey: tuple[ParamKey | str, ...],
+        items: list[Param | Value],
+        func: Callable,
+    ) -> None:
         for item in items:
             assert isinstance(item, (Param, Value)), item
         Param.__init__(self, paramstyle, paramkey)
         self.items = items
         self.func = func
 
-    def eval(self, values):
+    def eval(
+        self,
+        values: (
+            QueryVars
+            | dict[Attribute, Entity | OptAttrValue]
+            | list[Entity]
+            | list[OptAttrValue]
+            | tuple[int | str, ...]
+        ),
+    ) -> str:
         args = [
             item.eval(values) if isinstance(item, Param) else item.value
             for item in self.items
@@ -86,7 +145,7 @@ class CompositeParam(Param):
 class Value:
     __slots__ = "paramstyle", "value"
 
-    def __init__(self, paramstyle, value):
+    def __init__(self, paramstyle: str, value: OptAttrValue) -> None:
         self.paramstyle = paramstyle
         self.value = value
 
@@ -95,7 +154,7 @@ class Value:
         if value is None:
             return "null"
         if isinstance(value, bool):
-            return (value and "1") or "0"
+            return value and "1" or "0"
         if isinstance(value, str):
             return self.quote_str(value)
         if isinstance(value, datetime):
@@ -113,13 +172,13 @@ class Value:
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self.value)
 
-    def quote_str(self, s):
+    def quote_str(self, s: str) -> str:
         if self.paramstyle in ("format", "pyformat"):
             s = s.replace("%", "%%")
         return "'%s'" % s.replace("'", "''")
 
 
-def flat(tree):
+def flat(tree: Any) -> list:
     stack = [tree]
     result = []
     stack_pop = stack.pop
@@ -137,7 +196,36 @@ def flat(tree):
     return result[::-1]
 
 
-def flat_conditions(conditions):
+def flat_conditions(
+    conditions: (
+        tuple[
+            list[
+                str
+                | list[str | float | bool | None | type[str | float | bool | None]]
+                | Converter
+                | list
+                | tuple
+            ],
+            ...,
+        ]
+        | tuple[  # noqa: Y090
+            tuple[str, list[str | float | Converter | Sequence], bool, list[str]]
+        ]
+    ),
+) -> list[
+    (
+        list[
+            str
+            | list[
+                str | int | float | bool | None | type[str | int | float | bool | None]
+            ]
+            | Converter
+            | list
+            | tuple
+        ]
+        | tuple[str, list[str | int | float | Converter | Sequence], bool, list[str]]
+    )
+]:
     result = []
     for condition in conditions:
         if condition[0] == "AND":
@@ -147,7 +235,7 @@ def flat_conditions(conditions):
     return result
 
 
-def join(delimiter, items):
+def join(delimiter: str, items: Iterable[_T]) -> list[_T | str]:
     items = iter(items)
     try:
         result = [next(items)]
@@ -159,7 +247,9 @@ def join(delimiter, items):
     return result
 
 
-def move_conditions_from_inner_join_to_where(sections):
+def move_conditions_from_inner_join_to_where(
+    sections: tuple[Sequence[str | list[str]], ...],
+) -> Sequence[Sequence[str | list[str]]]:
     new_sections = list(sections)
     for i, section in enumerate(sections):
         if section[0] == "FROM":
@@ -175,12 +265,13 @@ def move_conditions_from_inner_join_to_where(sections):
     else:
         return sections
     for join in new_from_list[2:]:
+        assert isinstance(join, list)
         if join[1] in ("TABLE", "SELECT") and len(join) == 4:
             new_where_list.append(join.pop())
     return new_sections
 
 
-def make_binary_op(symbol, default_parentheses=False):
+def make_binary_op(symbol: str, default_parentheses: bool = False) -> Callable:
     def binary_op(builder, expr1, expr2, parentheses=None):
         if parentheses is None:
             parentheses = default_parentheses
@@ -191,15 +282,19 @@ def make_binary_op(symbol, default_parentheses=False):
     return binary_op
 
 
-def make_unary_func(symbol):
+def make_unary_func(symbol: str) -> Callable:
     def unary_func(builder, expr):
         return "%s(" % symbol, builder(expr), ")"
 
     return unary_func
 
 
-def indentable(method):
-    def new_method(builder, *args, **kwargs):
+def indentable(
+    method: Callable[Concatenate[SQLBuilder, _P], _T],
+) -> Callable[Concatenate[SQLBuilder, _P], _T | tuple[str, _T]]:
+    def new_method(
+        builder: SQLBuilder, *args: _P.args, **kwargs: _P.kwargs
+    ) -> _T | tuple[str, _T]:
         result = method(builder, *args, **kwargs)
         if builder.indent <= 1:
             return result
@@ -210,15 +305,29 @@ def indentable(method):
 
 
 class SQLBuilder:
-    dialect = None
-    param_class = Param
-    composite_param_class = CompositeParam
-    value_class = Value
-    indent_spaces = " " * 4
-    least_func_name = "least"
-    greatest_func_name = "greatest"
+    provider: DBAPIProvider
+    quote_name: Callable[[str | Iterable[str]], str]
+    paramstyle: str
+    ast: list[str | list | None]
+    indent: int
+    keys: dict[str | ParamKey | tuple[ParamKey | str, ...], Param]
+    inner_join_syntax: bool
+    suppress_aliases: bool
+    result: list[str | Value | Param]
+    params: tuple[Param, ...]
+    layout: list[str | ParamKey | tuple[ParamKey | str, ...]]
+    sql: str
+    adapter: Adapter
 
-    def __init__(self, provider, ast):
+    dialect: ClassVar[str | _typeshed.MaybeNone] = None
+    param_class: ClassVar[type[Param]] = Param
+    composite_param_class: ClassVar[type[CompositeParam]] = CompositeParam
+    value_class: type[Value] = Value
+    indent_spaces: ClassVar[str] = " " * 4
+    least_func_name: ClassVar[str] = "least"
+    greatest_func_name: ClassVar[str] = "greatest"
+
+    def __init__(self, provider: DBAPIProvider, ast: list[str | list | None]) -> None:
         self.provider = provider
         self.quote_name = provider.quote_name
         self.paramstyle = paramstyle = provider.paramstyle
@@ -238,22 +347,25 @@ class SQLBuilder:
         self.sql = "".join(map(str, self.result)).rstrip("\n")
         if paramstyle in ("qmark", "format"):
 
-            def adapter(values):
+            def adapter(values):  # pyright: ignore[reportRedeclaration]
                 return tuple(param.eval(values) for param in params)
+
         elif paramstyle == "numeric":
 
-            def adapter(values):
+            def adapter(values):  # pyright: ignore[reportRedeclaration]
                 return tuple(param.eval(values) for param in params)
+
         elif paramstyle in ("named", "pyformat"):
 
             def adapter(values):
                 return {"p%d" % param.id: param.eval(values) for param in params}
+
         else:
             throw(NotImplementedError, paramstyle)
         self.params = params
         self.adapter = adapter
 
-    def __call__(self, ast):
+    def __call__(self, ast: Sequence[str | list[str]]) -> Any:
         if isinstance(ast, str):
             throw(AstError, "An SQL AST list was expected. Got string: %r" % ast)
         symbol = ast[0]
@@ -263,6 +375,7 @@ class SQLBuilder:
         if method is None:
             throw(AstError, "Method not found: %s" % symbol)
         try:
+            assert method is not None
             return method(*ast[1:])
         except TypeError:
             raise
@@ -275,7 +388,13 @@ class SQLBuilder:
     ##            else:
     ##                del traceback
     ##                raise
-    def INSERT(self, table_name, columns, values, returning=None):
+    def INSERT(
+        self,
+        table_name: str,
+        columns: Iterable[str | Iterable],
+        values: Iterable[Sequence[str | tuple[int, None, None] | Converter]],
+        returning: str | None = None,
+    ) -> Sequence[str | list[str]]:
         return [
             "INSERT INTO ",
             self.quote_name(table_name),
@@ -289,7 +408,12 @@ class SQLBuilder:
     def DEFAULT(self):
         return "DEFAULT"
 
-    def UPDATE(self, table_name, pairs, where=None):
+    def UPDATE(
+        self,
+        table_name: str,
+        pairs: list[tuple[str, list[str | tuple[int, None, None] | Converter]]],
+        where: list[str | list[str | list]] | None = None,
+    ) -> list[str | list]:
         return [
             "UPDATE ",
             self.quote_name(table_name),
@@ -298,10 +422,15 @@ class SQLBuilder:
                 ", ",
                 [(self.quote_name(name), " = ", self(param)) for name, param in pairs],
             ),
-            (where and ["\n", self(where)]) or [],
+            where and ["\n", self(where)] or [],
         ]
 
-    def DELETE(self, alias, from_ast, where=None):
+    def DELETE(
+        self,
+        alias: str | None,
+        from_ast: list[str | list[str | None] | list[str]],
+        where: list[str | list] | None = None,
+    ) -> tuple:
         self.indent += 1
         if alias is not None:
             assert isinstance(alias, str)
@@ -327,15 +456,18 @@ class SQLBuilder:
                 return "DELETE ", self(from_ast)
             return "DELETE ", self(from_ast), self(where)
 
-    def _subquery(self, *sections):
+    def _subquery(self, *sections: Sequence[str | list[str]]) -> list[str | list[str]]:
         self.indent += 1
+        new_sections = sections
         if not self.inner_join_syntax:
-            sections = move_conditions_from_inner_join_to_where(sections)
-        result = [self(s) for s in sections]
+            new_sections = move_conditions_from_inner_join_to_where(sections)
+        result = [self(s) for s in new_sections]
         self.indent -= 1
         return result
 
-    def SELECT(self, *sections):
+    def SELECT(
+        self, *sections: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | list[str]]]:
         prev_suppress_aliases = self.suppress_aliases
         self.suppress_aliases = False
         try:
@@ -347,43 +479,60 @@ class SQLBuilder:
         finally:
             self.suppress_aliases = prev_suppress_aliases
 
-    def SELECT_FOR_UPDATE(self, nowait, skip_locked, *sections):
+    def SELECT_FOR_UPDATE(
+        self, nowait: bool, skip_locked: bool, *sections: Sequence[str | list[str]]
+    ) -> (
+        Sequence[str | Sequence[str | list[str]]]
+        | tuple[Sequence[str | Sequence[str | list[str]]], str, str, str, str]
+    ):
         assert not self.indent
         result = self.SELECT(*sections)
-        nowait = " NOWAIT" if nowait else ""
-        skip_locked = " SKIP LOCKED" if skip_locked else ""
-        return result, "FOR UPDATE", nowait, skip_locked, "\n"
+        nowait_str = " NOWAIT" if nowait else ""
+        skip_locked_str = " SKIP LOCKED" if skip_locked else ""
+        return result, "FOR UPDATE", nowait_str, skip_locked_str, "\n"
 
-    def EXISTS(self, *sections):
+    def EXISTS(
+        self, *sections: Sequence[str | list[str]]
+    ) -> tuple[str, str, str, list, str, str]:
         result = self._subquery(*sections)
         indent = self.indent_spaces * self.indent
         return "EXISTS (\n", indent, "SELECT 1\n", result, indent, ")"
 
-    def NOT_EXISTS(self, *sections):
+    def NOT_EXISTS(
+        self, *sections: Sequence[str | list[str]]
+    ) -> tuple[str, tuple[str, str, str, list, str, str]]:
         return "NOT ", self.EXISTS(*sections)
 
     @indentable
-    def ALL(self, *expr_list):
+    def ALL(
+        self, *expr_list: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         exprs = [self(e) for e in expr_list]
         return "SELECT ", join(", ", exprs), "\n"
 
     @indentable
-    def DISTINCT(self, *expr_list):
+    def DISTINCT(
+        self, *expr_list: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         exprs = [self(e) for e in expr_list]
         return "SELECT DISTINCT ", join(", ", exprs), "\n"
 
     @indentable
-    def AGGREGATES(self, *expr_list):
+    def AGGREGATES(
+        self, *expr_list: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         exprs = [self(e) for e in expr_list]
         return "SELECT ", join(", ", exprs), "\n"
 
-    def AS(self, expr, alias):
+    def AS(self, expr: list, alias: str) -> tuple[Sequence, str, str]:
         return self(expr), " AS ", self.quote_name(alias)
 
     def compound_name(self, name_parts):
-        return ".".join((p and self.quote_name(p)) or "" for p in name_parts)
+        return ".".join(p and self.quote_name(p) or "" for p in name_parts)
 
-    def sql_join(self, join_type, sources):
+    def sql_join(
+        self, join_type: str, sources: tuple[list[str | list], ...]
+    ) -> list[str]:
         indent = self.indent_spaces * (self.indent - 1)
         indent2 = indent + self.indent_spaces
         result = [indent, "FROM "]
@@ -414,11 +563,11 @@ class SQLBuilder:
             elif kind == "SELECT":
                 if alias is None:
                     throw(AstError, "Subquery in FROM section must have an alias")
-                result += (
+                result += [
                     self.SELECT(*x),
                     " ",
                     alias,
-                )  # Oracle does not support 'AS' here
+                ]  # Oracle does not support 'AS' here
             else:
                 throw(AstError, "Invalid source kind in FROM section: %r" % kind)
             if join_cond is not None:
@@ -426,18 +575,18 @@ class SQLBuilder:
         result.append("\n")
         return result
 
-    def FROM(self, *sources):
+    def FROM(self, *sources) -> list[str]:
         return self.sql_join("INNER", sources)
 
-    def INNER_JOIN(self, *sources):
+    def INNER_JOIN(self, *sources) -> list[str]:
         self.inner_join_syntax = True
         return self.sql_join("INNER", sources)
 
     @indentable
-    def LEFT_JOIN(self, *sources):
+    def LEFT_JOIN(self, *sources) -> Sequence[str | Sequence[str | list[str]]]:
         return self.sql_join("LEFT", sources)
 
-    def WHERE(self, *conditions):
+    def WHERE(self, *conditions) -> str | list[str]:
         if not conditions:
             return ""
         conditions = flat_conditions(conditions)
@@ -449,7 +598,7 @@ class SQLBuilder:
             extend((indent, "  AND ", self(condition), "\n"))
         return result
 
-    def HAVING(self, *conditions):
+    def HAVING(self, *conditions) -> str | list[str]:
         if not conditions:
             return ""
         conditions = flat_conditions(conditions)
@@ -462,34 +611,46 @@ class SQLBuilder:
         return result
 
     @indentable
-    def GROUP_BY(self, *expr_list):
+    def GROUP_BY(
+        self, *expr_list: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         exprs = [self(e) for e in expr_list]
         return "GROUP BY ", join(", ", exprs), "\n"
 
     @indentable
-    def UNION(self, kind, *sections):
+    def UNION(
+        self, kind, *sections: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         return "UNION ", kind, "\n", self.SELECT(*sections)
 
     @indentable
-    def INTERSECT(self, *sections):
+    def INTERSECT(
+        self, *sections: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         return "INTERSECT\n", self.SELECT(*sections)
 
     @indentable
-    def EXCEPT(self, *sections):
+    def EXCEPT(
+        self, *sections: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         return "EXCEPT\n", self.SELECT(*sections)
 
     @indentable
-    def ORDER_BY(self, *order_list):
+    def ORDER_BY(
+        self, *order_list: Sequence[str | list[str]]
+    ) -> Sequence[str | Sequence[str | Sequence[str | list[str]]]]:
         result = ["ORDER BY "]
         result.extend(join(", ", [self(expr) for expr in order_list]))
         result.append("\n")
         return result
 
-    def DESC(self, expr):
+    def DESC(self, expr: list[int | str]) -> tuple[Value | Sequence, str]:
         return self(expr), " DESC"
 
     @indentable
-    def LIMIT(self, limit, offset=None):
+    def LIMIT(
+        self, limit: int | None | Literal["null"], offset: int | None = None
+    ) -> str | Sequence[str]:
         if limit is None:
             limit = "null"
         else:
@@ -500,46 +661,64 @@ class SQLBuilder:
         else:
             return "LIMIT %s\n" % limit
 
-    def COLUMN(self, table_alias, col_name):
+    def COLUMN(self, table_alias: str | None, col_name: str) -> list[str]:
         if self.suppress_aliases or not table_alias:
             return ["%s" % self.quote_name(col_name)]
         return ["%s.%s" % (self.quote_name(table_alias), self.quote_name(col_name))]
 
-    def PARAM(self, paramkey, converter=None, optimistic=False):
+    def PARAM(
+        self,
+        paramkey: str | ParamKey,
+        converter: Converter | None = None,
+        optimistic: bool = False,
+    ) -> Param:
         return self.make_param(self.param_class, paramkey, converter, optimistic)
 
-    def make_param(self, param_class, paramkey, *args):
+    def make_param(
+        self,
+        param_class: type[_PT],
+        paramkey: str | ParamKey | tuple[ParamKey | str, ...],
+        *args,
+    ) -> _PT:
         keys = self.keys
         param = keys.get(paramkey)
         if param is None:
             param = param_class(self.paramstyle, paramkey, *args)
             keys[paramkey] = param
+        assert isinstance(param, param_class)
         return param
 
-    def make_composite_param(self, paramkey, items, func):
+    def make_composite_param(
+        self,
+        paramkey: tuple[ParamKey | str, ...],
+        items: list[Param | Value],
+        func: Callable,
+    ) -> CompositeParam:
         return self.make_param(self.composite_param_class, paramkey, items, func)
 
-    def STAR(self, table_alias):
+    def STAR(self, table_alias: str) -> tuple[str, str]:
         return self.quote_name(table_alias), ".*"
 
-    def ROW(self, *items):
+    def ROW(self, *items) -> tuple[str, list[Value | str | list[str]], str]:
         return "(", join(", ", map(self, items)), ")"
 
-    def VALUE(self, value):
+    def VALUE(self, value: OptAttrValue) -> Value:
         return self.value_class(self.paramstyle, value)
 
-    def AND(self, *cond_list):
+    def AND(self, *cond_list) -> list[str | tuple[list[str], str]]:
         cond_list = [self(condition) for condition in cond_list]
         return join(" AND ", cond_list)
 
-    def OR(self, *cond_list):
+    def OR(self, *cond_list) -> tuple[str, list[str | tuple[list[str], str]], str]:
         cond_list = [self(condition) for condition in cond_list]
         return "(", join(" OR ", cond_list), ")"
 
-    def NOT(self, condition):
+    def NOT(self, condition: list[str | list]) -> tuple[str, tuple, str]:
         return "NOT (", self(condition), ")"
 
-    def POW(self, expr1, expr2):
+    def POW(
+        self, expr1: list[int | str | list], expr2: list[int | str | list]
+    ) -> tuple[str, Value | tuple, str, Value | tuple, str]:
         return "power(", self(expr1), ", ", self(expr2), ")"
 
     EQ = make_binary_op(" = ")
@@ -586,25 +765,37 @@ class SQLBuilder:
             ")), 0), 1) > 1e-14",
         )
 
-    def CONCAT(self, *args):
+    def CONCAT(self, *args) -> tuple[str, list, str]:
         return "(", join(" || ", map(self, args)), ")"
 
-    def NEG(self, expr):
+    def NEG(self, expr: list[str]) -> tuple[str, list[str], str]:
         return "-(", self(expr), ")"
 
-    def IS_NULL(self, expr):
+    def IS_NULL(
+        self, expr: list[str | list[str | list] | type[None]]
+    ) -> tuple[Sequence, str]:
         return self(expr), " IS NULL"
 
-    def IS_NOT_NULL(self, expr):
+    def IS_NOT_NULL(self, expr: list[str | list | type[None]]) -> tuple[Sequence, str]:
         return self(expr), " IS NOT NULL"
 
-    def LIKE(self, expr, template, escape=None):
+    def LIKE(
+        self,
+        expr: list[str | list[str | list]],
+        template: list[str | list[str | list]],
+        escape: list[str] | None = None,
+    ) -> tuple[Unpack[tuple], str, Value]:
         result = self(expr), " LIKE ", self(template)
         if escape:
             result = result + (" ESCAPE ", self(escape))
         return result
 
-    def NOT_LIKE(self, expr, template, escape=None):
+    def NOT_LIKE(
+        self,
+        expr: list[str],
+        template: list[str | list[str | list]],
+        escape: list[str] | None = None,
+    ) -> tuple[Unpack[tuple], str, Value]:
         result = self(expr), " NOT LIKE ", self(template)
         if escape:
             result = result + (" ESCAPE ", self(escape))
@@ -616,7 +807,18 @@ class SQLBuilder:
     def NOT_BETWEEN(self, expr1, expr2, expr3):
         return self(expr1), " NOT BETWEEN ", self(expr2), " AND ", self(expr3)
 
-    def IN(self, expr1, x):
+    def IN(
+        self, expr1: list, x: list
+    ) -> (
+        str
+        | tuple[
+            list[str] | tuple[str, list, str],
+            str,
+            list[str | Param | Value | tuple[str, list, str]],
+            str,
+        ]
+        | tuple[Value | Param | list[str], str, tuple[str, list, str]]
+    ):
         if not x:
             return "0 = 1"
         if len(x) >= 1 and x[0] == "SELECT":
@@ -624,7 +826,18 @@ class SQLBuilder:
         expr_list = [self(expr) for expr in x]
         return self(expr1), " IN (", join(", ", expr_list), ")"
 
-    def NOT_IN(self, expr1, x):
+    def NOT_IN(
+        self, expr1: list, x: list
+    ) -> (
+        str
+        | tuple[
+            list[str] | tuple[str, list, str],
+            str,
+            list[str | Param | Value | tuple[str, list, str]],
+            str,
+        ]
+        | tuple[Value | Param | list[str], str, tuple[str, list, str]]
+    ):
         if not x:
             return "1 = 1"
         if len(x) >= 1 and x[0] == "SELECT":
@@ -632,7 +845,7 @@ class SQLBuilder:
         expr_list = [self(expr) for expr in x]
         return self(expr1), " NOT IN (", join(", ", expr_list), ")"
 
-    def COUNT(self, distinct, *expr_list):
+    def COUNT(self, distinct: bool | None, *expr_list) -> Sequence:
         assert distinct in (None, True, False)
         if not distinct:
             if not expr_list:
@@ -654,24 +867,23 @@ class SQLBuilder:
         else:
             throw(NotImplementedError)  # This line must not be executed
 
-    def SUM(self, distinct, expr):
+    def SUM(self, distinct: bool | None, expr: list[str]) -> tuple[str, list[str], str]:
         assert distinct in (None, True, False)
         return (
-            (distinct and "coalesce(SUM(DISTINCT ") or "coalesce(SUM(",
+            distinct and "coalesce(SUM(DISTINCT " or "coalesce(SUM(",
             self(expr),
             "), 0)",
         )
 
-    def AVG(self, distinct, expr):
+    def AVG(self, distinct: bool | None, expr: list) -> tuple[str, Sequence, str]:
         assert distinct in (None, True, False)
-        return (distinct and "AVG(DISTINCT ") or "AVG(", self(expr), ")"
+        return distinct and "AVG(DISTINCT " or "AVG(", self(expr), ")"
 
-    def GROUP_CONCAT(self, distinct, expr, sep=None):
+    def GROUP_CONCAT(
+        self, distinct: bool | None, expr: list[str], sep: list[str] | None = None
+    ) -> tuple[tuple, str]:
         assert distinct in (None, True, False)
-        result = (
-            (distinct and "GROUP_CONCAT(DISTINCT ") or "GROUP_CONCAT(",
-            self(expr),
-        )
+        result = distinct and "GROUP_CONCAT(DISTINCT " or "GROUP_CONCAT(", self(expr)
         if sep is not None:
             if self.provider.dialect == "MySQL":
                 result = result, " SEPARATOR ", self(sep)
@@ -684,12 +896,12 @@ class SQLBuilder:
     LENGTH = make_unary_func("length")
     ABS = make_unary_func("abs")
 
-    def COALESCE(self, *args):
+    def COALESCE(self, *args) -> tuple[str, list, str]:
         if len(args) < 2:
             assert False  # pragma: no cover
         return "coalesce(", join(", ", map(self, args)), ")"
 
-    def MIN(self, distinct, *args):
+    def MIN(self, distinct: bool | None, *args) -> tuple[str, str, list, str]:
         assert not distinct, distinct
         if len(args) == 0:
             assert False  # pragma: no cover
@@ -699,7 +911,7 @@ class SQLBuilder:
             fname = self.least_func_name
         return fname, "(", join(", ", map(self, args)), ")"
 
-    def MAX(self, distinct, *args):
+    def MAX(self, distinct: bool | None, *args) -> tuple[str, str, list, str]:
         assert not distinct, distinct
         if len(args) == 0:
             assert False  # pragma: no cover
@@ -709,17 +921,36 @@ class SQLBuilder:
             fname = self.greatest_func_name
         return fname, "(", join(", ", map(self, args)), ")"
 
-    def SUBSTR(self, expr, start, len=None):
+    def SUBSTR(
+        self,
+        expr: list[str | list[str]],
+        start: list[str | int | list[str | int | list]],
+        len: list[str | int] | None = None,
+    ) -> tuple:
         if len is None:
             return "substr(", self(expr), ", ", self(start), ")"
         return "substr(", self(expr), ", ", self(start), ", ", self(len), ")"
 
-    def STRING_SLICE(self, expr, start, stop):
+    def STRING_SLICE(
+        self,
+        expr: Sequence[str],
+        start: Sequence[str | int | list[str | int | list] | None] | None,
+        stop: Sequence[str | int | list[str | int | list] | None] | None,
+    ) -> tuple[
+        str,
+        list[str],
+        str,
+        Value | list[str] | tuple,
+        str,
+        Value | list[str] | tuple,
+        str,
+    ]:
         if start is None:
             start = ["VALUE", 0]
 
         if start[0] == "VALUE":
             start_value = start[1]
+            assert isinstance(start_value, int)
             if self.dialect == "PostgreSQL" and start_value < 0:
                 index_sql = ["LENGTH", expr]
                 if start_value < -1:
@@ -742,8 +973,10 @@ class SQLBuilder:
             len_sql = None
         elif stop[0] == "VALUE":
             stop_value = stop[1]
+            assert isinstance(stop_value, int)
             if start[0] == "VALUE":
                 start_value = start[1]
+                assert isinstance(start_value, int)
                 if start_value >= 0 and stop_value >= 0:
                     len_sql = ["VALUE", stop_value - start_value]
                 elif start_value < 0 and stop_value < 0:
@@ -783,6 +1016,7 @@ class SQLBuilder:
             stop_sql = ["COALESCE", stop, ["VALUE", -1]]
             if start[0] == "VALUE":
                 start_value = start[1]
+                assert isinstance(start_value, int)
                 start_sql = ["VALUE", start_value]
                 if start_value >= 0:
                     stop_positive = ["SUB", stop_sql, start_sql]
@@ -849,7 +1083,7 @@ class SQLBuilder:
         sql = ["SUBSTR", expr, index_sql, len_sql]
         return self(sql)
 
-    def CASE(self, expr, cases, default=None):
+    def CASE(self, expr: None, cases: list, default: list | None = None) -> list:
         if (
             expr is None
             and default is not None
@@ -869,34 +1103,53 @@ class SQLBuilder:
         result.append(" end")
         return result
 
-    def IF(self, cond, then, else_):
+    def IF(
+        self, cond: list[str | list], then: list[str | list], else_: list[str | list]
+    ) -> list[str | Param | list[str] | tuple]:
         return self.CASE(None, [(cond, then)], else_)
 
-    def TRIM(self, expr, chars=None):
+    def TRIM(
+        self, expr: list[str], chars: list[str | tuple | StrConverter] | None = None
+    ) -> tuple[str, list[str], str] | tuple[str, list[str], str, Value | Param, str]:
         if chars is None:
             return "trim(", self(expr), ")"
         return "trim(", self(expr), ", ", self(chars), ")"
 
-    def LTRIM(self, expr, chars=None):
+    def LTRIM(
+        self, expr: list[str], chars: list[str | tuple | StrConverter] | None = None
+    ) -> tuple[str, list[str], str] | tuple[str, list[str], str, Value | Param, str]:
         if chars is None:
             return "ltrim(", self(expr), ")"
         return "ltrim(", self(expr), ", ", self(chars), ")"
 
-    def RTRIM(self, expr, chars=None):
+    def RTRIM(
+        self, expr: list[str], chars: list[str | tuple | StrConverter] | None = None
+    ) -> tuple[str, list[str], str] | tuple[str, list[str], str, Value | Param, str]:
         if chars is None:
             return "rtrim(", self(expr), ")"
         return "rtrim(", self(expr), ", ", self(chars), ")"
 
-    def REPLACE(self, str, from_, to):
+    def REPLACE(
+        self,
+        str: list[str | StrConverter | Sequence],
+        from_: list[str],
+        to: list[str],
+    ) -> tuple[str, Param | Sequence, str, Value, str, Value, str]:
         return "replace(", self(str), ", ", self(from_), ", ", self(to), ")"
 
-    def TO_INT(self, expr):
+    def TO_INT(
+        self, expr: list[str | list[str] | list[str | int]]
+    ) -> tuple[str, list[str] | tuple, str]:
         return "CAST(", self(expr), " AS integer)"
 
-    def TO_STR(self, expr):
+    def TO_STR(
+        self, expr: list[str | list[str] | list[str | int]]
+    ) -> tuple[str, list[str] | tuple, str]:
         return "CAST(", self(expr), " AS text)"
 
-    def TO_REAL(self, expr):
+    def TO_REAL(
+        self, expr: list[str | list[str] | list[str | int]]
+    ) -> tuple[str, list[str] | tuple, str]:
         return "CAST(", self(expr), " AS real)"
 
     def TODAY(self):
@@ -905,7 +1158,7 @@ class SQLBuilder:
     def NOW(self):
         return "CURRENT_TIMESTAMP"
 
-    def DATE(self, expr):
+    def DATE(self, expr: Sequence[str | list[str]]) -> tuple[str, Any, str]:
         return "DATE(", self(expr), ")"
 
     def YEAR(self, expr):
@@ -929,12 +1182,16 @@ class SQLBuilder:
     def RANDOM(self):
         return "RAND()"
 
-    def RAWSQL(self, sql):
+    def RAWSQL(
+        self, sql: list[str | list[str | ParamKey | Converter]]
+    ) -> str | list[str | Param]:
         if isinstance(sql, str):
             return sql
         return [x if isinstance(x, str) else self(x) for x in sql]
 
-    def build_json_path(self, path):
+    def build_json_path(
+        self, path: list[list[(str | int | ParamKey | Converter)]]
+    ) -> tuple[Param | Value, bool, bool]:
         empty_slice = slice(None, None, None)
         has_params = False
         has_wildcards = False
@@ -952,11 +1209,13 @@ class SQLBuilder:
                 assert False, item
         if has_params:
             paramkey = tuple(
-                item.paramkey
-                if isinstance(item, Param)
-                else None
-                if type(item.value) is slice
-                else item.value
+                (
+                    item.paramkey
+                    if isinstance(item, Param)
+                    else None
+                    if type(item.value) is slice
+                    else item.value
+                )
                 for item in items
             )
             path_sql = self.make_composite_param(paramkey, items, self.eval_json_path)
@@ -966,7 +1225,7 @@ class SQLBuilder:
         return path_sql, has_params, has_wildcards
 
     @classmethod
-    def eval_json_path(cls, values):
+    def eval_json_path(cls, values: list[str | int]) -> str:
         result = ["$"]
         append = result.append
         empty_slice = slice(None, None, None)
@@ -987,41 +1246,55 @@ class SQLBuilder:
                 assert False, value
         return "".join(result)
 
-    def JSON_QUERY(self, expr, path):
+    def JSON_QUERY(self, expr: Sequence[str], path: Sequence[Sequence]) -> tuple:
         throw(NotImplementedError)
 
-    def JSON_VALUE(self, expr, path, type):
+    def JSON_VALUE(
+        self,
+        expr: Sequence[str],
+        path: Sequence[Sequence],
+        type: type[OptAttrValue] | _typeshed.MaybeNone,
+    ) -> tuple:
         throw(NotImplementedError)
 
-    def JSON_NONZERO(self, expr):
+    def JSON_NONZERO(self, expr: Sequence[str | Sequence]) -> tuple:
         throw(NotImplementedError)
 
     def JSON_CONCAT(self, left, right):
         throw(NotImplementedError)
 
-    def JSON_CONTAINS(self, expr, path, key):
+    def JSON_CONTAINS(
+        self, expr: Sequence[str], path: list[Sequence[str]], key: Sequence
+    ) -> Sequence:
         throw(NotImplementedError)
 
-    def JSON_ARRAY_LENGTH(self, value):
+    def JSON_ARRAY_LENGTH(self, value: Sequence[str | Sequence]) -> tuple:
         throw(NotImplementedError)
 
-    def JSON_PARAM(self, expr):
+    def JSON_PARAM(self, expr: Sequence[str | Sequence | Converter]) -> tuple:
         return self(expr)
 
-    def ARRAY_INDEX(self, col, index):
+    def ARRAY_INDEX(self, col: Sequence[str], index: Sequence) -> tuple:
         throw(NotImplementedError)
 
-    def ARRAY_CONTAINS(self, key, not_in, col):
+    def ARRAY_CONTAINS(
+        self, key: Sequence[str | float], not_in: bool, col: Sequence[str]
+    ) -> tuple:
         throw(NotImplementedError)
 
-    def ARRAY_SUBSET(self, array1, not_in, array2):
+    def ARRAY_SUBSET(self, array1: Sequence, not_in: bool, array2: Sequence) -> tuple:
         throw(NotImplementedError)
 
-    def ARRAY_LENGTH(self, array):
+    def ARRAY_LENGTH(self, array: Sequence[str]) -> tuple:
         throw(NotImplementedError)
 
-    def ARRAY_SLICE(self, array, start, stop):
+    def ARRAY_SLICE(
+        self,
+        array: Sequence[str],
+        start: Sequence[str | int | Sequence | None] | None,
+        stop: Sequence[str | int | Sequence | None] | None,
+    ) -> tuple:
         throw(NotImplementedError)
 
-    def MAKE_ARRAY(self, *items):
+    def MAKE_ARRAY(self, *items) -> tuple:
         throw(NotImplementedError)

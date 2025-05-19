@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ast
 import inspect
 import itertools
@@ -9,7 +11,20 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from functools import update_wrapper
 from random import random
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    NoReturn,
+    TypeAlias,
+    TypeVar,
+    cast,
+    overload,
+)
 from uuid import UUID
+
+from typing_extensions import LiteralString, Self
 
 from pony import utils
 from pony.orm import core
@@ -23,10 +38,25 @@ from pony.orm.asttranslation import (
 from pony.orm.core import (
     JOIN,
     Attribute,
+    AttrOffsets,
+    AttrValue,
+    CodeKey,
+    Constant,
+    Database,
     DescWrapper,
+    Entity,
     EntityMeta,
+    ExprType,
+    Numeric,
+    OptAttrValue,
+    ParamKey,
+    PyType,
+    Query,
+    QueryVars,
     Set,
     UseAnotherTranslator,
+    VarType,
+    VarTypes,
     const_functions,
     extract_vars,
     special_functions,
@@ -38,6 +68,7 @@ from pony.orm.ormtypes import (
     Json,
     MethodType,
     QueryType,
+    RawSQL,
     RawSQLType,
     SetType,
     are_comparable_types,
@@ -62,10 +93,31 @@ from pony.utils import (
     throw,
 )
 
+if TYPE_CHECKING:
+    from collections import defaultdict
+    from collections.abc import Callable, Iterable, Iterator, Sequence
+    from io import BytesIO
+
+    import _typeshed
+
+    from pony.orm.dbapiprovider import Converter
+
+_Ast: TypeAlias = list["str | list[str | int | bool | list]"]
+_Conditions: TypeAlias = list["list[list[Sequence[str]]]"]
+_ExprMonadType: TypeAlias = (
+    "type[Numeric | str | datetime | date | time | timedelta | Json | Array | Entity]"
+)
+_Sql: TypeAlias = list[
+    "str | bool | type[str | int | float | bool | None] | list | None"
+]
+
+_T = TypeVar("_T")
+_CT = TypeVar("_CT", bound=Constant)
+
 NoneType = type(None)
 
 
-def check_comparable(left_monad, right_monad, op="=="):
+def check_comparable(left_monad: Monad, right_monad: Monad, op: str = "==") -> None:
     t1, t2 = left_monad.type, right_monad.type
     if t1 == "METHOD":
         raise_forgot_parentheses(left_monad)
@@ -78,7 +130,11 @@ def check_comparable(left_monad, right_monad, op="=="):
 
 
 class IncomparableTypesError(TypeError):
-    def __init__(self, type1, type2):
+    def __init__(
+        self,
+        type1: ExprType,
+        type2: ExprType,
+    ) -> None:
         msg = "Incomparable types %r and %r in expression: {EXPR}" % (
             type2str(type1),
             type2str(type2),
@@ -88,7 +144,7 @@ class IncomparableTypesError(TypeError):
         self.type2 = type2
 
 
-def sqland(items):
+def sqland(items: list[list[str | list[str]]]) -> list[str] | list[str | list[str]]:
     if not items:
         return []
     if len(items) == 1:
@@ -102,7 +158,7 @@ def sqland(items):
     return result
 
 
-def sqlor(items):
+def sqlor(items: list[list[str | list[str]]]) -> list[str] | list[str | list[str]]:
     if not items:
         return []
     if len(items) == 1:
@@ -116,20 +172,24 @@ def sqlor(items):
     return result
 
 
-def join_tables(alias1, alias2, columns1, columns2):
+def join_tables(
+    alias1: str, alias2: str, columns1: list[str], columns2: list[str]
+) -> list[str | list[str]]:
     assert len(columns1) == len(columns2)
-    return sqland(
+    joined_tables = sqland(
         [
             ["EQ", ["COLUMN", alias1, c1], ["COLUMN", alias2, c2]]
             for c1, c2 in zip(columns1, columns2)
         ]
     )
+    return cast("list[str | list[str]]", joined_tables)
 
 
-def type2str(t):
+def type2str(t: ExprType) -> str:
     if type(t) is tuple:
         return "list"
     if type(t) is SetType:
+        assert isinstance(t, SetType)
         return "Set of " + type2str(t.item_type)
     try:
         return t.__name__
@@ -138,30 +198,80 @@ def type2str(t):
 
 
 class Local(localbase):
-    def __init__(self):
+    translators: list[SQLTranslator]
+
+    def __init__(self) -> None:
         self.translators = []
 
     @property
-    def translator(self):
+    def translator(self) -> SQLTranslator:
         return local.translators[-1]
 
 
-translator_counter = itertools.count(1)
+translator_counter = IntegerGenerator(1)
 
-local = Local()
+local: Local = Local()
 
 
 class SQLTranslator(ASTTranslator):
-    dialect = None
-    row_value_syntax = True
-    json_path_wildcard_syntax = False
-    json_values_are_comparable = True
-    rowid_support = False
+    aggregated: bool
+    aggregated_subquery_paths: set[str]
+    alias: str | None
+    can_be_cached: bool
+    code_key: CodeKey
+    col_names: list[str]
+    conditions: _Conditions
+    database: Database | _typeshed.MaybeNone
+    distinct: bool
+    expr_columns: list[list[str]]
+    expr_monads: Sequence[Monad]
+    expr_type: ExprType
+    extractors: dict[str, Callable] | _typeshed.MaybeNone
+    filter_num: int
+    fixed_param_values: dict[ParamKey, OptAttrValue]
+    from_optimized: bool
+    func_extractors_map: dict[Callable, dict[str, Callable]]
+    func_vartypes: VarTypes
+    groupby_monads: Sequence[Monad | MonadMixin] | None
+    having_conditions: list[list[list[str | list]]]
+    id: int
+    injected: bool
+    inside_order_by: bool
+    left_join: bool
+    limit: int | None
+    namespace_stack: list[dict[str, Monad | MonadMixin]]
+    offset: int | None
+    optimize: str | None
+    optimization_failed: bool
+    order: list[str]
+    original_code_key: CodeKey | None
+    original_filter_num: int | None
+    parent: SQLTranslator | None
+    pickled_tree: BytesIO
+    query_result_is_cacheable: bool
+    registered_functions: dict[FuncType, type[Monad]]
+    root_translator: SQLTranslator
+    row_layout: list[tuple[Callable, int | slice, str]] | _typeshed.MaybeNone
+    sqlquery: SqlQuery
+    tableref: TableRef | JoinedTableRef | ExprJoinedTableRef
+    vars: QueryVars | None
+    vartypes: VarTypes | _typeshed.MaybeNone
 
-    def __enter__(self):
+    dialect: ClassVar[str | _typeshed.MaybeNone] = None
+    json_path_wildcard_syntax: ClassVar[bool] = False
+    json_values_are_comparable: ClassVar[bool] = True
+    row_value_syntax: ClassVar[bool] = True
+    rowid_support: ClassVar[bool] = False
+
+    def __enter__(self) -> None:
         local.translators.append(self)
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         t = local.translators.pop()
         if isinstance(exc_val, UseAnotherTranslator):
             assert t is exc_val.translator
@@ -171,25 +281,27 @@ class SQLTranslator(ASTTranslator):
     def default_post(self, node):
         throw(NotImplementedError)  # pragma: no cover
 
-    def dispatch(self, node):
+    def dispatch(self, node: ast.expr) -> None:
         if hasattr(node, "monad"):
             return  # monad already assigned somehow
         if not getattr(node, "external", False) or getattr(node, "constant", False):
             return ASTTranslator.dispatch(self, node)  # default route
         self.call(self.__class__.dispatch_external, node)
 
-    def dispatch_external(self, node):
+    def dispatch_external(self, node: ast.AST) -> None:
         varkey = self.filter_num, node.src, self.code_key
         t = self.root_translator.vartypes[varkey]
         tt = type(t)
         if t is NoneType:
-            monad = ConstMonad.new(None)
+            monad: Monad = ConstMonad.new(None)
         elif tt is SetType:
+            assert isinstance(t, SetType)
             if isinstance(t.item_type, EntityMeta):
                 monad = EntityMonad(t.item_type)
             else:
                 throw(NotImplementedError)  # pragma: no cover
         elif tt is QueryType:
+            assert isinstance(t, QueryType)
             prev_translator = t.translator.deepcopy()
             prev_translator.parent = self
             prev_translator.injected = True
@@ -199,6 +311,7 @@ class SQLTranslator(ASTTranslator):
             if t.limit is not None or t.offset is not None:
                 monad = monad.call_limit(t.limit, t.offset)
         elif tt is FuncType:
+            assert isinstance(t, FuncType)
             func = t.func
             func_monad_class = self.registered_functions.get(func)
             if func_monad_class is not None:
@@ -206,8 +319,10 @@ class SQLTranslator(ASTTranslator):
             else:
                 monad = HybridFuncMonad(t, func.__name__)
         elif tt is MethodType:
+            assert isinstance(t, MethodType)
             obj, func = t.obj, t.func
             if isinstance(obj, EntityMeta):
+                assert obj is Entity
                 entity_monad = EntityMonad(obj)
                 if obj.__class__.__dict__.get(func.__name__) is not func:
                     throw(NotImplementedError)
@@ -217,6 +332,7 @@ class SQLTranslator(ASTTranslator):
             else:
                 throw(NotImplementedError)
         elif tt is tuple:
+            assert isinstance(t, tuple)
             params = []
             is_array = False
             if t and self.database.provider.array_converter_cls is not None:
@@ -240,31 +356,35 @@ class SQLTranslator(ASTTranslator):
                         TypeError,
                         "Expression `%s` should not contain None values" % node.src,
                     )
-                param = ParamMonad.new(item_type, (varkey, i, None))
+                param = ParamMonad.new(
+                    cast("PyType | EntityMeta", item_type), (varkey, i, None)
+                )
                 params.append(param)
             monad = ListMonad(params)
             if is_array:
-                array_type = array_types.get(item_type, None)
+                array_type = array_types.get(
+                    cast("type[int | str | float]", item_type), None
+                )
                 monad = ArrayParamMonad(
                     array_type, (varkey, None, None), list_monad=monad
                 )
         elif isinstance(t, RawSQLType):
             monad = RawSQLMonad(t, varkey)
         else:
-            monad = ParamMonad.new(t, (varkey, None, None))
+            monad = ParamMonad.new(cast("PyType | EntityMeta", t), (varkey, None, None))
         node.monad = monad
         monad.node = node
         monad.aggregated = monad.nogroup = False
 
-    def call(self, method, node):
+    def call(self, method: Callable, node: ast.AST) -> Monad | None:
         try:
             monad = method(self, node)
         except Exception:
             exc_class, exc, tb = sys.exc_info()
             try:
-                if not exc.args:
+                if exc and not exc.args:
                     exc.args = (ast2src(node),)
-                else:
+                elif exc:
                     msg = exc.args[0]
                     if isinstance(msg, str) and "{EXPR}" in msg:
                         msg = msg.replace("{EXPR}", ast2src(node))
@@ -314,7 +434,7 @@ class SQLTranslator(ASTTranslator):
     def __repr__(self):
         return "%s<%d>" % (self.__class__.__name__, self.id)
 
-    def deepcopy(self):
+    def deepcopy(self) -> SQLTranslator:
         result = deepcopy(self)
         result.id = next(translator_counter)
         result.copied_from = self
@@ -322,16 +442,16 @@ class SQLTranslator(ASTTranslator):
 
     def __init__(
         self,
-        tree,
-        parent_translator,
-        code_key=None,
-        filter_num=None,
-        extractors=None,
-        vars=None,
-        vartypes=None,
-        left_join=False,
-        optimize=None,
-    ):
+        tree: ast.GeneratorExp,
+        parent_translator: SQLTranslator | None,
+        code_key: CodeKey | None = None,
+        filter_num: int | None = None,
+        extractors: dict[str, Callable] | None = None,
+        vars: QueryVars | None = None,
+        vartypes: VarTypes | None = None,
+        left_join: bool = False,
+        optimize: str | None = None,
+    ) -> None:
         ASTTranslator.__init__(self, tree)
         self.id = next(translator_counter)
         local.translators.append(self)
@@ -355,16 +475,16 @@ class SQLTranslator(ASTTranslator):
 
     def init(
         self,
-        tree,
-        parent_translator,
-        code_key=None,
-        filter_num=None,
-        extractors=None,
-        vars=None,
-        vartypes=None,
-        left_join=False,
-        optimize=None,
-    ):
+        tree: ast.GeneratorExp,
+        parent_translator: SQLTranslator | None,
+        code_key: CodeKey | None = None,
+        filter_num: int | None = None,
+        extractors: dict[str, Callable] | None = None,
+        vars: QueryVars | None = None,
+        vartypes: VarTypes | None = None,
+        left_join: bool = False,
+        optimize: str | None = None,
+    ) -> None:
         this = self
         assert isinstance(tree, ast.GeneratorExp), tree
         self.can_be_cached = True
@@ -412,6 +532,7 @@ class SQLTranslator(ASTTranslator):
         self.aggregated_subquery_paths = set()
         for i, generator in enumerate(tree.generators):
             target = generator.target
+            ass_names = ()
             if isinstance(target, ast.Tuple):
                 ass_names = tuple(target.elts)
             elif isinstance(target, ast.Name):
@@ -422,10 +543,13 @@ class SQLTranslator(ASTTranslator):
             for ass_name in ass_names:
                 if not isinstance(ass_name, ast.Name):
                     throw(NotImplementedError, ast2src(ass_name))
+                assert isinstance(ass_name, ast.Name)
                 if not isinstance(ass_name.ctx, ast.Store):
                     throw(TypeError, ast2src(ass_name))
 
-            names = tuple(ass_name.id for ass_name in ass_names)
+            names = tuple(
+                ass_name.id for ass_name in cast("tuple[ast.Name, ...]", ass_names)
+            )
             for name in names:
                 if name in self.namespace and name in self.sqlquery.tablerefs:
                     throw(TranslationError, "Duplicate name: %r" % name)
@@ -444,7 +568,7 @@ class SQLTranslator(ASTTranslator):
             database = entity = None
 
             node = generator.iter
-            monad = getattr(node, "monad", None)
+            monad = node.monad
 
             if monad:  # Lambda was encountered inside generator
                 check_name_is_single()
@@ -501,7 +625,7 @@ class SQLTranslator(ASTTranslator):
                         )
                     except UseAnotherTranslator as e:
                         assert local.translators and local.translators[-1] is self
-                        self = e.translator
+                        self = cast("SQLTranslator", e.translator)
                         local.translators[-1] = self
                 else:
                     throw(
@@ -525,13 +649,14 @@ class SQLTranslator(ASTTranslator):
                         assert False
                 else:
                     check_name_is_single()
+                    assert name is not None
                     attr_names = []
                     while (
                         isinstance(monad, (AttrMonad, AttrSetMonad))
                         and monad.parent is not None
                     ):
                         attr_names.append(monad.attr.name)
-                        monad = monad.parent
+                        monad = cast("Monad", monad.parent)
                     attr_names.reverse()
 
                     if not isinstance(monad, ObjectIterMonad):
@@ -549,16 +674,19 @@ class SQLTranslator(ASTTranslator):
                         attr = parent_entity._adict_.get(attrname)
                         if attr is None:
                             throw(AttributeError, attrname)
+                        assert attr is not None
                         entity = attr.py_type
                         if not isinstance(entity, EntityMeta):
                             throw(
                                 NotImplementedError,
                                 "for %s in %s" % (name, ast2src(generator.iter)),
                             )
+                        assert isinstance(entity, EntityMeta)
                         can_affect_distinct = None
                         if attr.is_collection:
                             if not isinstance(attr, Set):
                                 throw(NotImplementedError, ast2src(generator.iter))
+                            assert isinstance(attr, Set)
                             reverse = attr.reverse
                             if reverse.is_collection:
                                 if not isinstance(reverse, Set):
@@ -617,19 +745,21 @@ class SQLTranslator(ASTTranslator):
 
         self.dispatch(tree.elt)
         assert not self.hint_join
-        monad = tree.elt.monad
+        monad: Monad = tree.elt.monad
         if isinstance(monad, ParamMonad):
             throw(
                 TranslationError,
                 "External parameter '%s' cannot be used as query result"
                 % ast2src(tree.elt),
             )
+        assert not isinstance(monad, ParamMonad)
         self.expr_monads = monad.items if isinstance(monad, ListMonad) else [monad]
         self.groupby_monads = None
         expr_type = monad.type
         if isinstance(expr_type, SetType):
             expr_type = expr_type.item_type
         if isinstance(expr_type, EntityMeta):
+            assert isinstance(monad, (ObjectMixin, AttrSetMonad))
             entity = expr_type
             self.expr_type = entity
             monad.orderby_columns = list(range(1, len(entity._pk_columns_) + 1))
@@ -646,10 +776,15 @@ class SQLTranslator(ASTTranslator):
             if self.aggregated:
                 self.groupby_monads = [monad]
             else:
+                assert False  # pragma: no cover
+            if self.aggregated:
+                self.groupby_monads = [monad]
+            else:
                 self.distinct |= monad.requires_distinct()
             self.tableref = tableref
             pk_only = parent_translator is not None or self.aggregated
             alias, pk_columns = tableref.make_join(pk_only=pk_only)
+            assert pk_columns is not None
             self.alias = alias
             self.expr_columns = [["COLUMN", alias, column] for column in pk_columns]
             self.row_layout = None
@@ -708,7 +843,7 @@ class SQLTranslator(ASTTranslator):
                 if isinstance(expr_type, EntityMeta):
                     next_offset = offset + len(expr_type._pk_columns_)
 
-                    def func(values, constructor=expr_type._get_by_raw_pkval_):
+                    def func(values, constructor=expr_type._get_by_raw_pkval_):  # pyright: ignore[reportRedeclaration]
                         if None in values:
                             return None
                         return constructor(values)
@@ -740,10 +875,10 @@ class SQLTranslator(ASTTranslator):
             raise UseAnotherTranslator(self)
 
     @property
-    def namespace(self):
+    def namespace(self) -> dict[str, Monad | MonadMixin]:
         return self.namespace_stack[-1]
 
-    def can_be_optimized(self):
+    def can_be_optimized(self) -> str | bool:
         if self.groupby_monads:
             return False
         if len(self.aggregated_subquery_paths) != 1:
@@ -756,12 +891,12 @@ class SQLTranslator(ASTTranslator):
 
     def process_query_qual(
         self,
-        prev_translator,
-        prev_limit,
-        prev_offset,
-        names,
-        try_extend_prev_query=False,
-    ):
+        prev_translator: SQLTranslator,
+        prev_limit: int | None,
+        prev_offset: int | None,
+        names: tuple[str, ...],
+        try_extend_prev_query: bool = False,
+    ) -> None:
         sqlquery = self.sqlquery
         tablerefs = sqlquery.tablerefs
         expr_types = prev_translator.expr_type
@@ -881,30 +1016,37 @@ class SQLTranslator(ASTTranslator):
                 else:
                     column = aliases_dict[base_expr_monad]
                     expr_ast = ["COLUMN", tableref.alias, column]
-                    expr_monad = ExprMonad.new(t, expr_ast, base_expr_monad.nullable)
+                    assert base_expr_monad.nullable is not None
+                    expr_monad = ExprMonad.new(
+                        cast("_ExprMonadType", t),
+                        cast("_Sql", expr_ast),
+                        base_expr_monad.nullable,
+                    )
                 assert name not in self.namespace
                 self.namespace[name] = expr_monad
 
     def construct_subquery_ast(
         self,
-        limit=None,
-        offset=None,
-        aliases=None,
-        star=None,
-        distinct=None,
-        is_not_null_checks=False,
-    ):
+        limit: int | None = None,
+        offset: int | None = None,
+        aliases: list[str] | None = None,
+        star: str | None = None,
+        distinct: bool | None = None,
+        is_not_null_checks: bool = False,
+    ) -> _Ast:
         subquery_ast, attr_offsets = self.construct_sql_ast(
             limit, offset, distinct, is_not_null_checks=is_not_null_checks
         )
         assert len(subquery_ast) >= 3 and subquery_ast[0] == "SELECT"
 
         select_ast = subquery_ast[1][:]
+        assert isinstance(select_ast, list)
         assert select_ast[0] in ("ALL", "DISTINCT", "AGGREGATES"), select_ast
         if aliases:
             assert not star and len(aliases) == len(select_ast) - 1
             for i, alias in enumerate(aliases):
                 expr = select_ast[i + 1]
+                assert isinstance(expr, list)
                 if expr[0] == "AS":
                     expr = expr[1]
                 select_ast[i + 1] = ["AS", expr, alias]
@@ -928,8 +1070,10 @@ class SQLTranslator(ASTTranslator):
             other_ast = subquery_ast[4:]
 
         if len(from_ast[1]) == 4:
+            assert isinstance(from_ast, list) and isinstance(from_ast[1], list)
             outer_conditions = from_ast[1][-1]
             from_ast[1] = from_ast[1][:-1]
+            assert isinstance(where_ast, list)
             if outer_conditions[0] == "AND":
                 where_ast[1:1] = outer_conditions[1:]
             else:
@@ -939,17 +1083,17 @@ class SQLTranslator(ASTTranslator):
 
     def construct_sql_ast(
         self,
-        limit=None,
-        offset=None,
-        distinct=None,
-        aggr_func_name=None,
-        aggr_func_distinct=None,
-        sep=None,
-        for_update=False,
-        nowait=False,
-        skip_locked=False,
-        is_not_null_checks=False,
-    ):
+        limit: int | None = None,
+        offset: int | None = None,
+        distinct: bool | None = None,
+        aggr_func_name: str | None = None,
+        aggr_func_distinct: bool | None = None,
+        sep: str | None = None,
+        for_update: bool = False,
+        nowait: bool = False,
+        skip_locked: bool = False,
+        is_not_null_checks: bool = False,
+    ) -> tuple[list[str | list[str | int | list]], AttrOffsets | None]:
         attr_offsets = None
         if distinct is None:
             if not self.order:
@@ -1032,6 +1176,7 @@ class SQLTranslator(ASTTranslator):
                         ["AGGREGATES", outer_aggr_ast],
                         ["FROM", [outer_alias, "SELECT", ast[1:]]],
                     ]
+
             else:
                 if aggr_func_name == "COUNT":
                     if (
@@ -1125,7 +1270,9 @@ class SQLTranslator(ASTTranslator):
         sql_ast = ast_transformer(sql_ast)
         return sql_ast, attr_offsets
 
-    def construct_delete_sql_ast(self):
+    def construct_delete_sql_ast(
+        self,
+    ) -> list[str | list[str | list[str | int | None | list]]] | None:
         entity = self.expr_type
         expr_monad = self.tree.elt.monad
         if not isinstance(entity, EntityMeta):
@@ -1134,6 +1281,7 @@ class SQLTranslator(ASTTranslator):
                 "Delete query should be applied to a single entity. Got: %s"
                 % ast2src(self.tree.expr),
             )
+        assert isinstance(entity, EntityMeta)
         force_in = False
         if self.groupby_monads:
             force_in = True
@@ -1174,7 +1322,7 @@ class SQLTranslator(ASTTranslator):
             sql_ast = ["DELETE", None, delete_from_ast, delete_where_ast]
         return sql_ast
 
-    def get_used_attrs(self):
+    def get_used_attrs(self) -> set[Attribute] | Any:
         if (
             isinstance(self.expr_type, EntityMeta)
             and not self.aggregated
@@ -1183,12 +1331,12 @@ class SQLTranslator(ASTTranslator):
             return self.tableref.used_attrs
         return ()
 
-    def without_order(self):
+    def without_order(self) -> SQLTranslator:
         self = self.deepcopy()
         self.order = []
         return self
 
-    def order_by_numbers(self, numbers):
+    def order_by_numbers(self, numbers: tuple[int, ...]) -> SQLTranslator:
         if 0 in numbers:
             throw(ValueError, "Numeric arguments of order_by() method must be non-zero")
         self = self.deepcopy()
@@ -1214,11 +1362,13 @@ class SQLTranslator(ASTTranslator):
                         % i,
                     )
             for pos in monad.orderby_columns:
-                new_order.append((i < 0 and ["DESC", ["VALUE", pos]]) or ["VALUE", pos])
+                new_order.append(i < 0 and ["DESC", ["VALUE", pos]] or ["VALUE", pos])
         order[:0] = new_order
         return self
 
-    def order_by_attributes(self, attrs):
+    def order_by_attributes(
+        self, attrs: tuple[Attribute | DescWrapper, ...]
+    ) -> SQLTranslator:
         entity = self.expr_type
         if not isinstance(entity, EntityMeta):
             throw(
@@ -1255,7 +1405,11 @@ class SQLTranslator(ASTTranslator):
         order[:0] = new_order
         return self
 
-    def apply_kwfilters(self, filterattrs, original_names=False):
+    def apply_kwfilters(
+        self,
+        filterattrs: Iterable[tuple[Attribute, int, bool]],
+        original_names: bool = False,
+    ) -> SQLTranslator:
         self = self.deepcopy()
         with self:
             if original_names:
@@ -1284,16 +1438,16 @@ class SQLTranslator(ASTTranslator):
 
     def apply_lambda(
         self,
-        func_id,
-        filter_num,
-        order_by,
-        func_ast,
-        argnames,
-        original_names,
-        extractors,
-        vars,
-        vartypes,
-    ):
+        func_id: str | int,
+        filter_num: int,
+        order_by: bool,
+        func_ast: ast.expr,
+        argnames: list[str],
+        original_names: bool,
+        extractors: dict[str, Callable],
+        vars: QueryVars | None,
+        vartypes: VarTypes,
+    ) -> SQLTranslator:
         self = self.deepcopy()
         func_ast = copy_ast(func_ast)  # func_ast = deepcopy(func_ast)
         self.code_key = func_id
@@ -1355,7 +1509,7 @@ class SQLTranslator(ASTTranslator):
                 ns = self.namespace_stack.pop()
                 assert ns is namespace
 
-    def preGeneratorExp(self, node):
+    def preGeneratorExp(self, node: ast.GeneratorExp) -> QuerySetMonad:
         translator_cls = self.__class__
         try:
             subtranslator = translator_cls(node, self)
@@ -1363,10 +1517,10 @@ class SQLTranslator(ASTTranslator):
             assert False
         return QuerySetMonad(subtranslator)
 
-    def postExpr(self, node):
+    def postExpr(self, node: ast.Expr) -> ExprMonad:
         return node.value.monad
 
-    def preCompare(self, node):
+    def preCompare(self, node: ast.Compare) -> BoolMonad:
         monads = []
         ops = zip(node.ops, node.comparators)
         left = node.left
@@ -1403,36 +1557,38 @@ class SQLTranslator(ASTTranslator):
             return monads[0]
         return AndMonad(monads)
 
-    def postConstant(self, node):
+    def postConstant(self, node: ast.Constant) -> ConstMonad | ListMonad:
         value = node.value
         if type(value) is frozenset:
             value = tuple(sorted(value))
-        return ConstMonad.new(value)
+        return ConstMonad.new(cast("Any", value))
 
-    def postNameConstant(self, node):  # Python <= 3.7
-        return ConstMonad.new(node.value)
+    def postNameConstant(self, node: ast.NameConstant) -> ConstMonad:  # Python <= 3.7
+        if node.value is None:
+            return ConstMonad.new(None)
+        return ConstMonad.new(cast("bool", node.value))
 
-    def postNum(self, node):  # Python <= 3.7
-        return ConstMonad.new(node.n)
+    def postNum(self, node: ast.Num) -> NumericConstMonad:  # Python <= 3.7
+        return ConstMonad.new(cast("int | float", node.n))
 
-    def postStr(self, node):  # Python <= 3.7
-        return ConstMonad.new(node.s)
+    def postStr(self, node: ast.Str) -> StringConstMonad:  # Python <= 3.7
+        return ConstMonad.new(cast("str", node.s))
 
-    def postBytes(self, node):  # Python <= 3.7
-        return ConstMonad.new(node.s)
+    def postBytes(self, node: ast.Bytes) -> BufferConstMonad:  # Python <= 3.7
+        return ConstMonad.new(cast("bytes", node.s))
 
-    def postList(self, node):
+    def postList(self, node: ast.List) -> ListMonad:
         return ListMonad([item.monad for item in node.elts])
 
-    def postTuple(self, node):
+    def postTuple(self, node: ast.Tuple) -> ListMonad:
         return ListMonad([item.monad for item in node.elts])
 
-    def postName(self, node):
+    def postName(self, node: ast.Name) -> Monad:
         monad = self.resolve_name(node.id)
         assert monad is not None
         return monad
 
-    def resolve_name(self, name):
+    def resolve_name(self, name: str) -> Monad:
         if name not in self.namespace:
             throw(
                 TranslationError,
@@ -1450,19 +1606,21 @@ class SQLTranslator(ASTTranslator):
             monad.translator.sqlquery.used_from_subquery = True
         return monad
 
-    def postAdd(self, node):
+    def postAdd(self, node: ast.BinOp) -> ExprMonad:
         return node.left.monad + node.right.monad
 
-    def postSub(self, node):
+    def postSub(
+        self, node: ast.BinOp
+    ) -> NumericExprMonad | TimedeltaExprMonad | DatetimeExprMonad | DateExprMonad:
         return node.left.monad - node.right.monad
 
-    def postMult(self, node):
+    def postMult(self, node: ast.BinOp) -> NumericExprMonad:
         return node.left.monad * node.right.monad
 
     def postMatMult(self, node):
         throw(NotImplementedError)
 
-    def postDiv(self, node):
+    def postDiv(self, node: ast.BinOp) -> NumericExprMonad:
         return node.left.monad / node.right.monad
 
     def postFloorDiv(self, node):
@@ -1477,19 +1635,19 @@ class SQLTranslator(ASTTranslator):
     def postRShift(self, node):
         throw(NotImplementedError)
 
-    def postPow(self, node):
+    def postPow(self, node: ast.BinOp) -> NumericExprMonad:
         return node.left.monad**node.right.monad
 
-    def postUSub(self, node):
+    def postUSub(self, node: ast.UnaryOp) -> NumericExprMonad:
         return -node.operand.monad
 
-    def postAttribute(self, node):
+    def postAttribute(self, node: ast.Attribute) -> Monad:
         return node.value.monad.getattr(node.attr)
 
-    def postAnd(self, node):
+    def postAnd(self, node: ast.BoolOp) -> AndMonad:
         return AndMonad([expr.monad for expr in node.values])
 
-    def postOr(self, node):
+    def postOr(self, node: ast.BoolOp) -> OrMonad:
         return OrMonad([expr.monad for expr in node.values])
 
     def postBitOr(self, node):
@@ -1501,10 +1659,10 @@ class SQLTranslator(ASTTranslator):
     def postBitXor(self, node):
         return node.left.monad ^ node.right.monad
 
-    def postNot(self, node):
+    def postNot(self, node: ast.UnaryOp) -> BoolMonad:
         return node.operand.monad.negate()
 
-    def preCall(self, node):
+    def preCall(self, node: ast.Call) -> Monad | None:
         for arg in node.args:
             if isinstance(arg, ast.Starred):
                 throw(NotImplementedError, "%s is not supported" % ast2src(arg))
@@ -1571,7 +1729,7 @@ class SQLTranslator(ASTTranslator):
             monad = monad.nonzero()
         return monad
 
-    def postCall(self, node):
+    def postCall(self, node: ast.Call) -> Monad:
         args = []
         kwargs = {}
         for arg in node.args:
@@ -1585,10 +1743,10 @@ class SQLTranslator(ASTTranslator):
         func_monad = node.func.monad
         return func_monad(*args, **kwargs)
 
-    def postkeyword(self, node):
+    def postkeyword(self, node: ast.keyword) -> None:
         pass  # this node will be processed by postCall
 
-    def postSubscript(self, node):
+    def postSubscript(self, node: ast.Subscript) -> Monad:
         assert isinstance(node.ctx, ast.Load)
         sub = node.slice
         if isinstance(sub, ast.Tuple):
@@ -1614,13 +1772,13 @@ class SQLTranslator(ASTTranslator):
             return node.value.monad[start:stop:step]
         return node.value.monad[sub.monad]
 
-    def postSlice(self, node):
+    def postSlice(self, node: ast.Slice) -> None:
         return None
 
     def postIndex(self, node):
         return node.value.monad
 
-    def postIfExp(self, node):
+    def postIfExp(self, node: ast.IfExp) -> ExprMonad:
         test_monad, then_monad, else_monad = (
             node.test.monad,
             node.body.monad,
@@ -1628,7 +1786,9 @@ class SQLTranslator(ASTTranslator):
         )
         if test_monad.type is not bool:
             test_monad = test_monad.nonzero()
-        result_type = coerce_types(then_monad.type, else_monad.type)
+        result_type = cast(
+            "_ExprMonadType", coerce_types(then_monad.type, else_monad.type)
+        )
         test_sql, then_sql, else_sql = (
             test_monad.getsql()[0],
             then_monad.getsql(),
@@ -1651,7 +1811,7 @@ class SQLTranslator(ASTTranslator):
         )
         return result
 
-    def postJoinedStr(self, node):
+    def postJoinedStr(self, node: ast.JoinedStr) -> StringExprMonad:
         nullable = False
         sql = ["CONCAT"]
         for item in node.values:
@@ -1663,7 +1823,7 @@ class SQLTranslator(ASTTranslator):
             sql.append(monad.getsql()[0])
         return StringExprMonad(str, sql, nullable=nullable)
 
-    def postFormattedValue(self, node):
+    def postFormattedValue(self, node: ast.FormattedValue) -> AttrMonad:
         if node.format_spec is not None:
             throw(
                 NotImplementedError,
@@ -1677,7 +1837,9 @@ class SQLTranslator(ASTTranslator):
         return node.value.monad
 
 
-def combine_limit_and_offset(limit, offset, limit2, offset2):
+def combine_limit_and_offset(
+    limit: int | None, offset: int | None, limit2: int | None, offset2: int | None
+) -> tuple[int | None, int | None]:
     assert limit is None or limit >= 0
     assert limit2 is None or limit2 >= 0
 
@@ -1698,7 +1860,9 @@ def combine_limit_and_offset(limit, offset, limit2, offset2):
     return limit, offset
 
 
-def coerce_monads(m1, m2, for_comparison=False):
+def coerce_monads(
+    m1: Monad, m2: Monad, for_comparison: bool = False
+) -> tuple[EntityMeta | type[AttrValue] | SetType | None, Monad, Monad]:
     result_type = coerce_types(m1.type, m2.type)
     if (
         result_type in numeric_types
@@ -1728,7 +1892,24 @@ max_alias_length = 30
 
 
 class SqlQuery:
-    def __init__(self, translator, parent_sqlquery=None, left_join=False):
+    alias_counters: dict[str, int]
+    conditions: _Conditions
+    expr_counter: IntegerGenerator
+    expr_list: list[list[str]]
+    from_ast: _Ast
+    left_join: bool
+    outer_conditions: _Conditions
+    parent_sqlquery: SqlQuery | None
+    tablerefs: dict[str, TableRef | JoinedTableRef]
+    translator: SQLTranslator
+    used_from_subquery: bool
+
+    def __init__(
+        self,
+        translator: SQLTranslator,
+        parent_sqlquery: SqlQuery | None = None,
+        left_join: bool = False,
+    ) -> None:
         self.translator = translator
         self.parent_sqlquery = parent_sqlquery
         self.left_join = left_join
@@ -1744,7 +1925,7 @@ class SqlQuery:
             self.expr_counter = parent_sqlquery.expr_counter
         self.used_from_subquery = False
 
-    def get_tableref(self, name_path):
+    def get_tableref(self, name_path: str) -> TableRef | JoinedTableRef | None:
         tableref = self.tablerefs.get(name_path)
         parent_sqlquery = self.parent_sqlquery
         if tableref is None and parent_sqlquery:
@@ -1753,7 +1934,12 @@ class SqlQuery:
                 parent_sqlquery.used_from_subquery = True
         return tableref
 
-    def add_tableref(self, name_path, parent_tableref, attr):
+    def add_tableref(
+        self,
+        name_path: str,
+        parent_tableref: TableRef | JoinedTableRef,
+        attr: Attribute,
+    ) -> JoinedTableRef:
         assert name_path not in self.tablerefs
         if parent_tableref.sqlquery is not self:
             parent_tableref.sqlquery.used_from_subquery = True
@@ -1761,14 +1947,25 @@ class SqlQuery:
         self.tablerefs[name_path] = tableref
         return tableref
 
-    def make_alias(self, name):
+    def make_alias(self, name: str) -> str:
         name = name[: max_alias_length - 3].lower()
         i = self.alias_counters.setdefault(name, 0) + 1
         alias = name if i == 1 and name != "t" else "%s-%d" % (name, i)
         self.alias_counters[name] = i
         return alias
 
-    def join_table(self, parent_alias, alias, table_name, join_cond):
+    def join_table(
+        self,
+        parent_alias: str,
+        alias: str,
+        table_name: str,
+        join_cond: list[
+            str
+            | list[list[str] | str]
+            | list[str]
+            | list[str | list[str] | list[list[str]]]
+        ],
+    ) -> None:
         new_item = [alias, "TABLE", table_name, join_cond]
         from_ast = self.from_ast
         for i in range(1, len(from_ast)):
@@ -1781,7 +1978,15 @@ class SqlQuery:
 
 
 class TableRef:
-    def __init__(self, sqlquery, name, entity):
+    alias: str
+    can_affect_distinct: bool
+    entity: EntityMeta
+    joined: bool
+    name_path: str
+    sqlquery: SqlQuery
+    used_attrs: set[Attribute]
+
+    def __init__(self, sqlquery: SqlQuery, name: str, entity: EntityMeta) -> None:
         self.sqlquery = sqlquery
         self.alias = sqlquery.make_alias(name)
         self.name_path = self.alias
@@ -1790,7 +1995,7 @@ class TableRef:
         self.can_affect_distinct = True
         self.used_attrs = set()
 
-    def make_join(self, pk_only=False):
+    def make_join(self, pk_only: bool = False) -> tuple[str, list[str] | None]:
         entity = self.entity
         if not self.joined:
             sqlquery = self.sqlquery
@@ -1804,13 +2009,24 @@ class TableRef:
 
 
 class ExprTableRef(TableRef):
-    def __init__(self, sqlquery, name, subquery_ast, expr_names, expr_aliases):
+    subquery_ast: _Ast
+    expr_names: tuple[str, ...]
+    expr_aliases: list[str]
+
+    def __init__(
+        self,
+        sqlquery: SqlQuery,
+        name: str,
+        subquery_ast: _Ast,
+        expr_names: tuple[str, ...],
+        expr_aliases: list[str],
+    ) -> None:
         TableRef.__init__(self, sqlquery, name, None)
         self.subquery_ast = subquery_ast
         self.expr_names = expr_names
         self.expr_aliases = expr_aliases
 
-    def make_join(self, pk_only=False):
+    def make_join(self, pk_only: bool = False) -> tuple[str, list[str] | None]:
         assert self.subquery_ast[0] == "SELECT"
         if not self.joined:
             sqlquery = self.sqlquery
@@ -1820,11 +2036,15 @@ class ExprTableRef(TableRef):
 
 
 class StarTableRef(TableRef):
-    def __init__(self, sqlquery, name, entity, subquery_ast):
+    subquery_ast: _Ast
+
+    def __init__(
+        self, sqlquery: SqlQuery, name: str, entity: EntityMeta, subquery_ast: _Ast
+    ) -> None:
         TableRef.__init__(self, sqlquery, name, entity)
         self.subquery_ast = subquery_ast
 
-    def make_join(self, pk_only=False):
+    def make_join(self, pk_only: bool = False) -> tuple[str, list[str]]:
         entity = self.entity
         assert self.subquery_ast[0] == "SELECT"
         if not self.joined:
@@ -1839,7 +2059,26 @@ class StarTableRef(TableRef):
 
 
 class ExprJoinedTableRef:
-    def __init__(self, sqlquery, parent_tableref, parent_columns, name, entity):
+    alias: str | _typeshed.MaybeNone
+    can_affect_distinct: bool
+    entity: EntityMeta
+    joined: bool
+    name: str
+    name_path: str
+    parent_columns: list[str]
+    parent_tableref: ExprTableRef
+    pk_columns: list[str] | _typeshed.MaybeNone
+    sqlquery: SqlQuery
+    used_attrs: set[Attribute]
+
+    def __init__(
+        self,
+        sqlquery: SqlQuery,
+        parent_tableref: ExprTableRef,
+        parent_columns: list[str],
+        name: str,
+        entity: EntityMeta,
+    ) -> None:
         self.sqlquery = sqlquery
         self.parent_tableref = parent_tableref
         self.parent_columns = parent_columns
@@ -1850,7 +2089,7 @@ class ExprJoinedTableRef:
         self.can_affect_distinct = False
         self.used_attrs = set()
 
-    def make_join(self, pk_only=False):
+    def make_join(self, pk_only: bool = False) -> tuple[str, list[str]]:
         entity = self.entity
         if self.joined:
             return self.alias, self.pk_columns
@@ -1871,7 +2110,25 @@ class ExprJoinedTableRef:
 
 
 class JoinedTableRef:
-    def __init__(self, sqlquery, name_path, parent_tableref, attr):
+    alias: str | _typeshed.MaybeNone
+    can_affect_distinct: bool
+    entity: EntityMeta
+    joined: bool
+    name_path: str
+    optimized: bool | None
+    parent_tableref: TableRef | JoinedTableRef
+    pk_columns: list[str] | _typeshed.MaybeNone
+    sqlquery: SqlQuery
+    used_attrs: set[Attribute]
+    var_name: str | None
+
+    def __init__(
+        self,
+        sqlquery: SqlQuery,
+        name_path: str,
+        parent_tableref: TableRef | JoinedTableRef,
+        attr: Attribute,
+    ) -> None:
         self.sqlquery = sqlquery
         self.name_path = name_path
         self.var_name = name_path if is_ident(name_path) else None
@@ -1885,7 +2142,7 @@ class JoinedTableRef:
         self.can_affect_distinct = False
         self.used_attrs = set()
 
-    def make_join(self, pk_only=False):
+    def make_join(self, pk_only: bool = False) -> tuple[str, list[str]]:
         entity = self.entity
         if self.joined:
             if pk_only or not self.optimized:
@@ -1909,6 +2166,7 @@ class JoinedTableRef:
             else:
                 # one-to-one or many-to-one relationship with foreign key column on the left side
                 if attr.pk_offset is not None:
+                    assert left_pk_columns is not None
                     offset = attr.pk_columns_offset
                     left_columns = left_pk_columns[offset : offset + len(attr.columns)]
                 else:
@@ -1917,7 +2175,7 @@ class JoinedTableRef:
                     self.alias = parent_alias
                     self.pk_columns = left_columns
                     self.optimized = True
-                    # tableref.joined = True
+                    # self.joined = True
                     return parent_alias, left_columns
                 alias = sqlquery.make_alias(self.var_name or entity.__name__)
                 join_cond = join_tables(parent_alias, alias, left_columns, pk_columns)
@@ -1929,6 +2187,7 @@ class JoinedTableRef:
             )
         else:
             # many-to-many relationship
+            assert isinstance(attr, Set)
             right_m2m_columns = attr.reverse_columns if attr.symmetric else attr.columns
             if not self.joined:
                 m2m_table = attr.table
@@ -1972,7 +2231,7 @@ class JoinedTableRef:
         return self.alias, pk_columns
 
 
-def wrap_monad_method(cls_name, func):
+def wrap_monad_method(cls_name: str, func: Callable[..., _T]) -> Callable[..., _T]:
     overrider_name = "%s_%s" % (cls_name, func.__name__)
 
     def wrapper(monad, *args, **kwargs):
@@ -1983,50 +2242,73 @@ def wrap_monad_method(cls_name, func):
 
 
 class MonadMeta(type):
-    def __new__(meta, cls_name, bases, cls_dict):
+    aggregated: bool
+    nullable: bool
+    orderby_columns: Sequence[int]
+    tableref: TableRef | JoinedTableRef | ExprJoinedTableRef | _typeshed.MaybeNone
+    type: Any
+
+    def __new__(
+        meta: type[_typeshed.Self],
+        cls_name: str,
+        bases: (
+            tuple[type[Monad | object]]  # noqa: Y090
+            | tuple[type[object], _typeshed.Self]
+        ),
+        cls_dict: dict[str, Any],
+    ) -> type[_typeshed.Self]:
         for name, func in cls_dict.items():
             if not isinstance(func, types.FunctionType):
                 continue
             if name in ("__new__", "__init__"):
                 continue
             cls_dict[name] = wrap_monad_method(cls_name, func)
-        return super().__new__(meta, cls_name, bases, cls_dict)
+        return cast(
+            "type[_typeshed.Self]", super().__new__(meta, cls_name, bases, cls_dict)
+        )
 
 
 class MonadMixin(metaclass=MonadMeta):
-    pass
+    def getsql(self, sqlquery: SqlQuery | None = None) -> Any:
+        throw(NotImplementedError)
 
 
 class Monad(metaclass=MonadMeta):
-    disable_distinct = False
-    disable_ordering = False
+    node: ast.AST | _typeshed.MaybeNone
+    nogroup: bool
+    translator: SQLTranslator
 
-    def __init__(self, type, nullable=True):
+    disable_distinct: ClassVar[bool] = False
+    disable_ordering: ClassVar[bool] = False
+
+    def __init__(self, type: VarType, nullable: bool = True) -> None:
         self.node = None
         self.translator = local.translator
         self.type = type
         self.nullable = nullable
         self.mixin_init()
 
-    def mixin_init(self):
+    def mixin_init(self) -> NoneMonad | None:
         pass
 
-    def to_single_cell_value(self):
+    def to_single_cell_value(self) -> Monad:
         return self
 
-    def cmp(self, op, monad2):
+    def cmp(self, op: str, monad2: Monad) -> CmpMonad:
         return CmpMonad(op, self, monad2)
 
-    def contains(self, item, not_in=False):
+    def contains(
+        self, item: Monad, /, not_in: bool = False
+    ) -> BoolExprMonad | NoneMonad:
         throw(TypeError)
 
-    def nonzero(self):
+    def nonzero(self) -> BoolMonad | RawSQLMonad | NoneMonad:
         return CmpMonad("is not", self, NoneMonad())
 
-    def negate(self):
+    def negate(self) -> BoolMonad | JsonItemMonad | NoneMonad:
         return NotMonad(self)
 
-    def getattr(self, attrname):
+    def getattr(self, attrname: str) -> Monad:
         try:
             property_method = getattr(self, "attr_" + attrname)
         except AttributeError:
@@ -2039,10 +2321,10 @@ class Monad(metaclass=MonadMeta):
             return MethodMonad(self, attrname)
         return property_method()
 
-    def len(self):
+    def len(self) -> Any:
         throw(TypeError)
 
-    def count(self, distinct=None):
+    def count(self, distinct: NumericConstMonad | None = None) -> ExprMonad:
         distinct = distinct_from_monad(distinct, default=True)
         translator = self.translator
         if self.aggregated:
@@ -2060,7 +2342,7 @@ class Monad(metaclass=MonadMeta):
             row = ["ROW"] + expr
             expr = ["CASE", None, [[["IS_NULL", row], ["VALUE", None]]], row]
         # elif translator.dialect == 'PostgreSQL':  # another way
-        #     alias, pk_columns = monad.tableref.make_join(pk_only=False)
+        #     alias, pk_columns = self.tableref.make_join(pk_only=False)
         #     expr = [ 'COLUMN', alias, 'ctid' ]
         elif translator.dialect in ("SQLite", "Oracle"):
             alias, pk_columns = self.tableref.make_join(pk_only=False)
@@ -2074,11 +2356,18 @@ class Monad(metaclass=MonadMeta):
                 "with composite primary keys inside aggregate functions. Got: {EXPR}"
                 % translator.dialect,
             )
-        result = ExprMonad.new(int, ["COUNT", distinct, expr], nullable=False)
+        result = ExprMonad.new(
+            int, cast("_Sql", ["COUNT", distinct, expr]), nullable=False
+        )
         result.aggregated = True
         return result
 
-    def aggregate(self, func_name, distinct=None, sep=None):
+    def aggregate(
+        self,
+        func_name: str,
+        distinct: NumericConstMonad | None = None,
+        sep: str | None = None,
+    ) -> ExprMonad | NoneMonad:
         distinct = distinct_from_monad(distinct)
         translator = self.translator
         if self.aggregated:
@@ -2130,7 +2419,7 @@ class Monad(metaclass=MonadMeta):
         elif func_name == "GROUP_CONCAT":
             result_type = str
         else:
-            result_type = expr_type
+            result_type = cast("_ExprMonadType", expr_type)
         if distinct is None:
             distinct = getattr(self, "forced_distinct", False) and func_name in (
                 "SUM",
@@ -2144,65 +2433,74 @@ class Monad(metaclass=MonadMeta):
         result.aggregated = True
         return result
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> Any:
         throw(TypeError)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Monad | slice, /) -> Any:
         throw(TypeError)
 
-    def __add__(self, monad2):
+    def __add__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __sub__(self, monad2):
+    def __sub__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __mul__(self, monad2):
+    def __mul__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __truediv__(self, monad2):
+    def __truediv__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __floordiv__(self, monad2):
+    def __floordiv__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __pow__(self, monad2):
+    def __pow__(self, monad2: Monad, /) -> Any:
         throw(TypeError)
 
-    def __neg__(self):
+    def __neg__(self) -> Any:
         throw(TypeError)
 
-    def __or__(self, monad2):
+    def __or__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __and__(self, monad2):
+    def __and__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def __xor__(self, monad2):
+    def __xor__(self, monad2: Monad, /) -> Callable[[Monad, Monad], Monad]:
         throw(TypeError)
 
-    def abs(self):
+    def abs(self) -> Any:
         throw(TypeError)
 
-    def cast_from_json(self, type):
+    def cast_from_json(self, type: type) -> Any:
         assert False, self
 
-    def to_int(self):
+    def to_int(self) -> NumericExprMonad | NoneMonad:
         return NumericExprMonad(
             int, ["TO_INT", self.getsql()[0]], nullable=self.nullable
         )
 
-    def to_str(self):
+    def to_str(self) -> StringExprMonad | NoneMonad:
         return StringExprMonad(
             str, ["TO_STR", self.getsql()[0]], nullable=self.nullable
         )
 
-    def to_real(self):
+    def to_real(self) -> NumericExprMonad | NoneMonad:
         return NumericExprMonad(
             float, ["TO_REAL", self.getsql()[0]], nullable=self.nullable
         )
 
+    def getsql(self, sqlquery: SqlQuery | None = None) -> Any:
+        throw(NotImplementedError)
 
-def distinct_from_monad(distinct, default=None):
+
+@overload
+def distinct_from_monad(
+    distinct: NumericConstMonad, default: bool | None = None
+) -> bool: ...
+@overload
+def distinct_from_monad(distinct: None, default: bool) -> bool: ...
+def distinct_from_monad(distinct, default=None) -> bool | None:
     if distinct is None:
         return default
     if isinstance(distinct, NumericConstMonad) and isinstance(distinct.value, bool):
@@ -2214,7 +2512,12 @@ def distinct_from_monad(distinct, default=None):
 
 
 class RawSQLMonad(Monad):
-    def __init__(self, rawtype, varkey, nullable=True):
+    rawtype: RawSQLType
+    varkey: tuple[int, str, int]
+
+    def __init__(
+        self, rawtype: RawSQLType, varkey: tuple[int, str, int], nullable: bool = True
+    ) -> None:
         if rawtype.result_type is None:
             type = rawtype
         else:
@@ -2223,7 +2526,7 @@ class RawSQLMonad(Monad):
         self.rawtype = rawtype
         self.varkey = varkey
 
-    def contains(self, item, not_in=False):
+    def contains(self, item: Monad, not_in: bool = False) -> BoolExprMonad:
         translator = self.translator
         expr = item.getsql()
         if len(expr) == 1:
@@ -2240,10 +2543,10 @@ class RawSQLMonad(Monad):
         sql = [op, expr, self.getsql()]
         return BoolExprMonad(sql, nullable=item.nullable)
 
-    def nonzero(self):
+    def nonzero(self) -> Self:
         return self
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str | list]]:
         provider = self.translator.database.provider
         rawtype = self.rawtype
         result = []
@@ -2267,7 +2570,9 @@ typeerror_re_2 = re.compile(
 )
 
 
-def reraise_improved_typeerror(exc, func_name, orig_func_name):
+def reraise_improved_typeerror(
+    exc: TypeError, func_name: str, orig_func_name: str
+) -> NoReturn:
     if not exc.args:
         throw(exc)
     msg = exc.args[0]
@@ -2320,7 +2625,7 @@ def reraise_improved_typeerror(exc, func_name, orig_func_name):
     throw(exc)
 
 
-def raise_forgot_parentheses(monad):
+def raise_forgot_parentheses(monad) -> NoReturn:
     assert monad.type == "METHOD"
     throw(
         TranslationError,
@@ -2329,15 +2634,18 @@ def raise_forgot_parentheses(monad):
 
 
 class MethodMonad(Monad):
-    def __init__(self, parent, attrname):
+    parent: StringAttrMonad
+    attrname: str
+
+    def __init__(self, parent: StringAttrMonad, attrname: str) -> None:
         Monad.__init__(self, "METHOD", nullable=False)
         self.parent = parent
         self.attrname = attrname
 
-    def getattr(self, attrname):
+    def getattr(self, attrname) -> Any:
         raise_forgot_parentheses(self)
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> StringExprMonad:
         method = getattr(self.parent, "call_" + self.attrname)
         try:
             return method(*args, **kwargs)
@@ -2385,7 +2693,7 @@ class MethodMonad(Monad):
 
 
 class EntityMonad(Monad):
-    def __init__(self, entity):
+    def __init__(self, entity: EntityMeta) -> None:
         Monad.__init__(self, SetType(entity))
         translator = self.translator
         if translator.database is None:
@@ -2401,11 +2709,13 @@ class EntityMonad(Monad):
 
 
 class ListMonad(Monad):
-    def __init__(self, items):
+    items: list
+
+    def __init__(self, items: list) -> None:
         Monad.__init__(self, tuple(item.type for item in items))
         self.items = items
 
-    def contains(self, x, not_in=False):
+    def contains(self, x: Monad, not_in: bool = False) -> BoolExprMonad:
         if isinstance(x.type, SetType):
             throw(
                 TypeError,
@@ -2442,7 +2752,7 @@ class ListMonad(Monad):
             sql, nullable=x.nullable or any(item.nullable for item in self.items)
         )
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str]]:
         return [["ROW"] + [item.getsql()[0] for item in self.items]]
 
 
@@ -2459,7 +2769,9 @@ _binop_errmsg = (
 )
 
 
-def make_numeric_binop(op, sqlop):
+def make_numeric_binop(
+    op: str, sqlop: str
+) -> Callable[[Monad, Monad], NumericExprMonad | NumericSetExprMonad]:
     def numeric_binop(monad, monad2):
         if isinstance(monad2, (AttrSetMonad, NumericSetExprMonad)):
             return NumericSetExprMonad(op, sqlop, monad, monad2)
@@ -2480,20 +2792,23 @@ def make_numeric_binop(op, sqlop):
 
 
 class NumericMixin(MonadMixin):
-    def mixin_init(self):
+    forced_distinct: bool
+    translator: SQLTranslator
+
+    def mixin_init(self) -> None:
         assert self.type in numeric_types, self.type
 
-    __add__ = make_numeric_binop("+", "ADD")
-    __sub__ = make_numeric_binop("-", "SUB")
-    __mul__ = make_numeric_binop("*", "MUL")
-    __truediv__ = make_numeric_binop("/", "DIV")
-    __floordiv__ = make_numeric_binop("//", "FLOORDIV")
-    __mod__ = make_numeric_binop("%", "MOD")
-    __and__ = make_numeric_binop("&", "BITAND")
-    __or__ = make_numeric_binop("|", "BITOR")
-    __xor__ = make_numeric_binop("^", "BITXOR")
+    __add__: Callable[[Monad, Monad], Monad] = make_numeric_binop("+", "ADD")
+    __sub__: Callable[[Monad, Monad], Monad] = make_numeric_binop("-", "SUB")
+    __mul__: Callable[[Monad, Monad], Monad] = make_numeric_binop("*", "MUL")
+    __truediv__: Callable[[Monad, Monad], Monad] = make_numeric_binop("/", "DIV")
+    __floordiv__: Callable[[Monad, Monad], Monad] = make_numeric_binop("//", "FLOORDIV")
+    __mod__: Callable[[Monad, Monad], Monad] = make_numeric_binop("%", "MOD")
+    __and__: Callable[[Monad, Monad], Monad] = make_numeric_binop("&", "BITAND")
+    __or__: Callable[[Monad, Monad], Monad] = make_numeric_binop("|", "BITOR")
+    __xor__: Callable[[Monad, Monad], Monad] = make_numeric_binop("^", "BITXOR")
 
-    def __pow__(self, monad2):
+    def __pow__(self, monad2: Monad) -> Monad:
         if not isinstance(monad2, NumericMixin):
             throw(
                 TypeError,
@@ -2508,22 +2823,22 @@ class NumericMixin(MonadMixin):
             nullable=self.nullable or monad2.nullable,
         )
 
-    def __neg__(self):
+    def __neg__(self) -> NumericExprMonad:
         sql = self.getsql()[0]
         return NumericExprMonad(self.type, ["NEG", sql], nullable=self.nullable)
 
-    def abs(self):
+    def abs(self) -> NumericExprMonad:
         sql = self.getsql()[0]
         return NumericExprMonad(self.type, ["ABS", sql], nullable=self.nullable)
 
-    def nonzero(self):
+    def nonzero(self) -> BoolExprMonad:
         translator = self.translator
         sql = self.getsql()[0]
         if not (translator.dialect == "PostgreSQL" and self.type is bool):
             sql = ["NE", sql, ["VALUE", 0]]
         return BoolExprMonad(sql, nullable=False)
 
-    def negate(self):
+    def negate(self) -> BoolExprMonad:
         sql = self.getsql()[0]
         translator = self.translator
         pg_bool = translator.dialect == "PostgreSQL" and self.type is bool
@@ -2538,7 +2853,7 @@ class NumericMixin(MonadMixin):
         return BoolExprMonad(result_sql, nullable=False)
 
 
-def numeric_attr_factory(name):
+def numeric_attr_factory(name: str) -> Callable[[Monad], NumericExprMonad]:
     def attr_func(monad):
         sql = [name, monad.getsql()[0]]
         return NumericExprMonad(int, sql, nullable=monad.nullable)
@@ -2547,8 +2862,12 @@ def numeric_attr_factory(name):
     return attr_func
 
 
-def make_datetime_binop(op, sqlop):
-    def datetime_binop(monad, monad2):
+def make_datetime_binop(
+    op: str, sqlop: str
+) -> Callable[[DateMixin, TimedeltaMixin], DateExprMonad | DatetimeExprMonad]:
+    def datetime_binop(
+        monad: DateMixin, monad2: TimedeltaMixin
+    ) -> DateExprMonad | DatetimeExprMonad:
         if monad2.type != timedelta:
             throw(
                 TypeError,
@@ -2566,14 +2885,20 @@ def make_datetime_binop(op, sqlop):
 
 
 class DateMixin(MonadMixin):
-    def mixin_init(self):
+    def mixin_init(self) -> None:
         assert self.type is date
 
-    attr_year = numeric_attr_factory("YEAR")
-    attr_month = numeric_attr_factory("MONTH")
-    attr_day = numeric_attr_factory("DAY")
+    attr_year: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "YEAR"
+    )
+    attr_month: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "MONTH"
+    )
+    attr_day: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "DAY"
+    )
 
-    def __add__(self, other):
+    def __add__(self, other: TimedeltaMixin) -> DateExprMonad | DatetimeExprMonad:
         if other.type != timedelta:
             throw(
                 TypeError,
@@ -2585,7 +2910,9 @@ class DateMixin(MonadMixin):
             nullable=self.nullable or other.nullable,
         )
 
-    def __sub__(self, other):
+    def __sub__(
+        self, other: TimedeltaMixin | DateMixin
+    ) -> TimedeltaExprMonad | DateExprMonad | DatetimeExprMonad:
         if other.type == timedelta:
             return DateExprMonad(
                 self.type,
@@ -2604,32 +2931,45 @@ class DateMixin(MonadMixin):
 
 
 class TimeMixin(MonadMixin):
-    def mixin_init(self):
+    def mixin_init(self) -> None:
         assert self.type is time
 
-    attr_hour = numeric_attr_factory("HOUR")
-    attr_minute = numeric_attr_factory("MINUTE")
-    attr_second = numeric_attr_factory("SECOND")
+    attr_hour: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "HOUR"
+    )
+    attr_minute: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "MINUTE"
+    )
+    attr_second: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "SECOND"
+    )
 
 
 class TimedeltaMixin(MonadMixin):
-    def mixin_init(self):
+    def mixin_init(self) -> None:
         assert self.type is timedelta
 
 
 class DatetimeMixin(DateMixin):
-    def mixin_init(self):
+    def mixin_init(self) -> None:
         assert self.type is datetime
 
-    def call_date(self):
+    def call_date(self) -> DateExprMonad:
         sql = ["DATE", self.getsql()[0]]
-        return ExprMonad.new(date, sql, nullable=self.nullable)
+        date_cast = ExprMonad.new(date, sql, nullable=self.nullable)
+        return cast("DateExprMonad", date_cast)
 
-    attr_hour = numeric_attr_factory("HOUR")
-    attr_minute = numeric_attr_factory("MINUTE")
-    attr_second = numeric_attr_factory("SECOND")
+    attr_hour: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "HOUR"
+    )
+    attr_minute: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "MINUTE"
+    )
+    attr_second: ClassVar[Callable[[Monad], NumericExprMonad]] = numeric_attr_factory(
+        "SECOND"
+    )
 
-    def __add__(self, other):
+    def __add__(self, other: TimedeltaMixin) -> DatetimeExprMonad:
         if other.type != timedelta:
             throw(
                 TypeError,
@@ -2641,7 +2981,9 @@ class DatetimeMixin(DateMixin):
             nullable=self.nullable or other.nullable,
         )
 
-    def __sub__(self, other):
+    def __sub__(
+        self, other: TimedeltaMixin | DateMixin
+    ) -> TimedeltaExprMonad | DatetimeExprMonad:
         if other.type == timedelta:
             return DatetimeExprMonad(
                 self.type,
@@ -2659,7 +3001,7 @@ class DatetimeMixin(DateMixin):
         )
 
 
-def make_string_binop(op, sqlop):
+def make_string_binop(op: str, sqlop: str) -> Callable[[Monad, Monad], StringExprMonad]:
     def string_binop(monad, monad2):
         if not are_comparable_types(monad.type, monad2.type, sqlop):
             if monad2.type == "METHOD":
@@ -2681,7 +3023,7 @@ def make_string_binop(op, sqlop):
     return string_binop
 
 
-def make_string_func(sqlop):
+def make_string_func(sqlop: str) -> Callable[[Monad], StringExprMonad]:
     def func(monad):
         sql = monad.getsql()
         assert len(sql) == 1
@@ -2692,26 +3034,35 @@ def make_string_func(sqlop):
 
 
 class StringMixin(MonadMixin):
-    def mixin_init(self):
+    translator: SQLTranslator
+
+    def mixin_init(self) -> None:
         assert issubclass(self.type, str), self.type
 
-    __add__ = make_string_binop("+", "CONCAT")
+    __add__: Callable[[Monad, Monad], StringExprMonad] = make_string_binop(
+        "+", "CONCAT"
+    )
 
-    def __getitem__(self, index):
+    def __getitem__(
+        self, index: NumericMixin | slice
+    ) -> StringMixin | ConstMonad | ListMonad:
         root_translator = self.translator.root_translator
         dialect = root_translator.database.provider.dialect
 
-        def param_to_const(monad, is_start=True):
+        def param_to_const(
+            monad: Monad | NumericMixin, is_start: bool = True
+        ) -> Monad | NumericMixin:
             if isinstance(monad, ParamMonad):
                 key = monad.paramkey[0]
                 if key in root_translator.fixed_param_values:
                     index_value = root_translator.fixed_param_values[key]
                 else:
+                    assert root_translator.vars is not None
                     index_value = root_translator.vars[key]
                     if index_value is None:
                         index_value = 0 if is_start else -1
                     root_translator.fixed_param_values[key] = index_value
-                return ConstMonad.new(index_value)
+                return ConstMonad.new(cast("Constant | tuple", index_value))
             return monad
 
         if isinstance(index, ListMonad):
@@ -2763,12 +3114,15 @@ class StringMixin(MonadMixin):
                 self.type,
                 sql,
                 nullable=self.nullable
-                or (start is not None and start.nullable)
-                or (stop is not None and stop.nullable),
+                or start is not None
+                and start.nullable
+                or stop is not None
+                and stop.nullable,
             )
 
-        index = param_to_const(index)
+        index = cast("NumericMixin", param_to_const(index))
         if isinstance(self, StringConstMonad) and isinstance(index, NumericConstMonad):
+            assert isinstance(index.value, int)
             return ConstMonad.new(self.value[index.value])
         if index.type is not int:
             throw(
@@ -2801,7 +3155,7 @@ class StringMixin(MonadMixin):
         sql = ["SUBSTR", expr_sql, index_sql, ["VALUE", 1]]
         return StringExprMonad(self.type, sql, nullable=self.nullable)
 
-    def negate(self):
+    def negate(self) -> BoolExprMonad:
         sql = self.getsql()[0]
         translator = self.translator
         if translator.dialect == "Oracle":
@@ -2817,7 +3171,7 @@ class StringMixin(MonadMixin):
         result.aggregated = self.aggregated
         return result
 
-    def nonzero(self):
+    def nonzero(self) -> BoolExprMonad:
         sql = self.getsql()[0]
         translator = self.translator
         if translator.dialect == "Oracle":
@@ -2828,18 +3182,21 @@ class StringMixin(MonadMixin):
         result.aggregated = self.aggregated
         return result
 
-    def len(self):
+    def len(self) -> NumericExprMonad | ConstMonad | ListMonad:
         sql = self.getsql()[0]
         return NumericExprMonad(int, ["LENGTH", sql])
 
-    def contains(self, item, not_in=False):
+    def contains(self, item: Monad, not_in: bool = False) -> BoolExprMonad:
         check_comparable(item, self, "LIKE")
         return self._like(item, before="%", after="%", not_like=not_in)
 
-    call_upper = make_string_func("UPPER")
-    call_lower = make_string_func("LOWER")
+    call_upper: ClassVar[Callable[[Monad], StringExprMonad]] = make_string_func("UPPER")
+    call_lower: ClassVar[Callable[[Monad], StringExprMonad]] = make_string_func("LOWER")
 
-    def call_startswith(self, arg):
+    def call_startswith(
+        self,
+        arg: StringParamMonad | RawSQLMonad | StringConstMonad | NumericConstMonad,
+    ) -> BoolExprMonad:
         if not are_comparable_types(self.type, arg.type, None):
             if arg.type == "METHOD":
                 raise_forgot_parentheses(arg)
@@ -2850,7 +3207,9 @@ class StringMixin(MonadMixin):
             )
         return self._like(arg, after="%")
 
-    def call_endswith(self, arg):
+    def call_endswith(
+        self, arg: NumericConstMonad | StringConstMonad | StringParamMonad
+    ) -> BoolExprMonad:
         if not are_comparable_types(self.type, arg.type, None):
             if arg.type == "METHOD":
                 raise_forgot_parentheses(arg)
@@ -2861,7 +3220,13 @@ class StringMixin(MonadMixin):
             )
         return self._like(arg, before="%")
 
-    def _like(self, item, before=None, after=None, not_like=False):
+    def _like(
+        self,
+        item: RawSQLMonad | StringConstMonad | StringAttrMonad | StringParamMonad,
+        before: str | None = None,
+        after: str | None = None,
+        not_like: bool = False,
+    ) -> BoolExprMonad:
         escape = False
         translator = self.translator
         if isinstance(item, StringConstMonad):
@@ -2905,7 +3270,11 @@ class StringMixin(MonadMixin):
             result_sql = ["OR", result_sql, ["IS_NULL", sql]]
         return BoolExprMonad(result_sql, nullable=not_like)
 
-    def strip(self, chars, strip_type):
+    def strip(
+        self,
+        chars: StringParamMonad | StringConstMonad | NumericConstMonad | None,
+        strip_type: str,
+    ) -> StringExprMonad:
         if chars is not None and not are_comparable_types(self.type, chars.type, None):
             if chars.type == "METHOD":
                 raise_forgot_parentheses(chars)
@@ -2920,34 +3289,41 @@ class StringMixin(MonadMixin):
             sql.append(chars.getsql()[0])
         return StringExprMonad(self.type, sql, nullable=self.nullable)
 
-    def call_strip(self, chars=None):
+    def call_strip(self, chars: NumericConstMonad | None = None) -> StringExprMonad:
         return self.strip(chars, "TRIM")
 
-    def call_lstrip(self, chars=None):
+    def call_lstrip(self, chars: StringConstMonad | None = None) -> StringExprMonad:
         return self.strip(chars, "LTRIM")
 
-    def call_rstrip(self, chars=None):
+    def call_rstrip(
+        self, chars: StringConstMonad | StringParamMonad | None = None
+    ) -> StringExprMonad:
         return self.strip(chars, "RTRIM")
 
 
 class JsonMixin:
-    disable_distinct = (
+    translator: SQLTranslator
+    type: type
+
+    disable_distinct: ClassVar[bool] = (
         True  # at least in Oracle we cannot use DISTINCT with JSON column
     )
-    disable_ordering = (
+    disable_ordering: ClassVar[bool] = (
         True  # at least in Oracle we cannot use ORDER BY with JSON column
     )
 
-    def mixin_init(self):
+    def mixin_init(self) -> None:
         assert self.type is Json, self.type
 
-    def get_path(self):
+    def get_path(self) -> tuple[JsonMixin, list]:
         return self, []
 
-    def __getitem__(self, key):
+    def __getitem__(
+        self, key: EllipsisMonad | NumericMixin | slice | StringMixin
+    ) -> JsonItemMonad:
         return JsonItemMonad(self, key)
 
-    def contains(self, key, not_in=False):
+    def contains(self, key: Monad, not_in: bool = False) -> BoolExprMonad:
         translator = self.translator
         if isinstance(key, ParamMonad):
             if translator.dialect == "Oracle":
@@ -2974,11 +3350,11 @@ class JsonMixin:
         sql = ["JSON_CONCAT", left_sql, right_sql]
         return JsonExprMonad(Json, sql)
 
-    def len(self):
+    def len(self) -> NumericExprMonad:
         sql = ["JSON_ARRAY_LENGTH", self.getsql()[0]]
         return NumericExprMonad(int, sql)
 
-    def cast_from_json(self, type):
+    def cast_from_json(self, type: type) -> Self | ExprMonad:
         if type in (Json, NoneType):
             return self
         throw(
@@ -2986,12 +3362,17 @@ class JsonMixin:
             "Cannot compare whole JSON value, you need to select specific sub-item: {EXPR}",
         )
 
-    def nonzero(self):
+    def nonzero(self) -> BoolExprMonad:
         return BoolExprMonad(["JSON_NONZERO", self.getsql()[0]])
+
+    def getsql(self, sqlquery: SqlQuery | None = None) -> Any:
+        throw(NotImplementedError)
 
 
 class ArrayMixin(MonadMixin):
-    def contains(self, key, not_in=False):
+    translator: SQLTranslator
+
+    def contains(self, key: Monad, not_in: bool = False) -> BoolExprMonad:
         if key.type is self.type.item_type:
             sql = "ARRAY_CONTAINS", key.getsql()[0], not_in, self.getsql()[0]
             return BoolExprMonad(sql)
@@ -3018,18 +3399,20 @@ class ArrayMixin(MonadMixin):
             % (type2str(key.type), type2str(self.type)),
         )
 
-    def len(self):
+    def len(self) -> NumericExprMonad:
         sql = ["ARRAY_LENGTH", self.getsql()[0]]
         return NumericExprMonad(int, sql)
 
     def nonzero(self):
         return BoolExprMonad(["GT", ["ARRAY_LENGTH", self.getsql()[0]], ["VALUE", 0]])
 
-    def _index(self, index, from_one, plus_one):
+    def _index(
+        self, index: NumericMixin | None, from_one: bool, plus_one: bool
+    ) -> list[str | list | None] | None:
         if isinstance(index, NumericConstMonad):
             expr_sql = self.getsql()[0]
             index_sql = index.getsql()[0]
-            value = index_sql[1]
+            value = cast("Numeric", index_sql[1])
             if value >= 0:
                 index_sql = ["VALUE", value + int(from_one and plus_one)]
             else:
@@ -3051,7 +3434,7 @@ class ArrayMixin(MonadMixin):
             ]
             return index_sql
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: slice | NumericMixin) -> ExprMonad:
         dialect = self.translator.database.provider.dialect
         expr_sql = self.getsql()[0]
         from_one = dialect != "SQLite"
@@ -3069,21 +3452,27 @@ class ArrayMixin(MonadMixin):
 
 
 class ObjectMixin(MonadMixin):
-    def mixin_init(self):
+    attr: Attribute
+    parent: ObjectMixin
+    tableref: TableRef | JoinedTableRef | ExprJoinedTableRef
+    type: EntityMeta
+
+    def mixin_init(self) -> None:
         assert isinstance(self.type, EntityMeta)
 
-    def negate(self):
+    def negate(self) -> BoolMonad:
         return CmpMonad("is", self, NoneMonad())
 
-    def nonzero(self):
+    def nonzero(self) -> CmpMonad:
         return CmpMonad("is not", self, NoneMonad())
 
-    def getattr(self, attrname):
+    def getattr(self, attrname: str) -> Monad:
         if isinstance(self, ParamMonad):
             throw(
                 NotImplementedError,
                 "{EXPR} for external expressions inside hybrid methods is not supported",
             )
+        assert not isinstance(self, ParamMonad)
         entity = self.type
         attr = entity._adict_.get(attrname) or entity._subclass_adict_.get(attrname)
         if attr is None:
@@ -3109,28 +3498,120 @@ class ObjectMixin(MonadMixin):
         else:
             return AttrSetMonad(self, attr)
 
-    def requires_distinct(self, joined=False):
-        return self.attr.reverse.is_collection or self.parent.requires_distinct(
+    def requires_distinct(self, joined: bool = False) -> bool:
+        attr = self.attr
+        return attr.reverse.is_collection or self.parent.requires_distinct(
             joined
         )  # parent ???
 
 
 class ObjectIterMonad(ObjectMixin, Monad):
-    def __init__(self, tableref, entity):
+    tableref: TableRef | JoinedTableRef | ExprJoinedTableRef
+
+    def __init__(
+        self,
+        tableref: TableRef | JoinedTableRef | ExprJoinedTableRef,
+        entity: EntityMeta,
+    ) -> None:
         Monad.__init__(self, entity)
         self.tableref = tableref
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str]]:
         alias, pk_columns = self.tableref.make_join(pk_only=True)
+        assert pk_columns is not None
         return [["COLUMN", alias, column] for column in pk_columns]
 
-    def requires_distinct(self, joined=False):
+    def requires_distinct(self, joined: bool = False) -> bool:
         return self.tableref.name_path != self.translator.tree.generators[-1].target.id
 
 
 class AttrMonad(Monad):
+    parent: ObjectMixin
+
+    @overload
     @staticmethod
-    def new(parent, attr, *args, **kwargs):
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[Numeric],
+        *args,
+        **kwargs,
+    ) -> NumericAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin, attr: Attribute[str], *args, **kwargs
+    ) -> StringAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[date],
+        *args,
+        **kwargs,
+    ) -> DateAttrMonad | DatetimeAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[time],
+        *args,
+        **kwargs,
+    ) -> TimeAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[timedelta],
+        *args,
+        **kwargs,
+    ) -> TimedeltaAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[bytes],
+        *args,
+        **kwargs,
+    ) -> BufferAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[UUID],
+        *args,
+        **kwargs,
+    ) -> UuidAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[Json],
+        *args,
+        **kwargs,
+    ) -> JsonAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[Array],
+        *args,
+        **kwargs,
+    ) -> ArrayAttrMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[Entity],
+        *args,
+        **kwargs,
+    ) -> ObjectAttrMonad: ...
+    @staticmethod
+    def new(
+        parent: ObjectMixin,
+        attr: Attribute[AttrValue | Entity],
+        *args,
+        **kwargs,
+    ) -> AttrMonad:
         t = normalize_type(attr.py_type)
         if t in numeric_types:
             cls = NumericAttrMonad
@@ -3158,12 +3639,14 @@ class AttrMonad(Monad):
             throw(NotImplementedError, t)  # pragma: no cover
         return cls(parent, attr, *args, **kwargs)
 
-    def __new__(cls, *args):
+    def __new__(cls, *args) -> Self:
         if cls is AttrMonad:
             assert False, "Abstract class"  # pragma: no cover
         return Monad.__new__(cls)
 
-    def __init__(self, parent, attr):
+    def __init__(
+        self, parent: ObjectAttrMonad | ObjectIterMonad, attr: Attribute
+    ) -> None:
         assert self.__class__ is not AttrMonad
         attr_type = normalize_type(attr.py_type)
         Monad.__init__(self, attr_type)
@@ -3171,12 +3654,13 @@ class AttrMonad(Monad):
         self.attr = attr
         self.nullable = attr.nullable
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str]]:
         parent = self.parent
         attr = self.attr
         entity = attr.entity
         pk_only = attr.pk_offset is not None
         alias, parent_columns = parent.tableref.make_join(pk_only)
+        assert parent_columns is not None
         if pk_only:
             if entity._pk_is_composite_:
                 offset = attr.pk_columns_offset
@@ -3191,11 +3675,16 @@ class AttrMonad(Monad):
             alias, columns = self.tableref.make_join()
         else:
             columns = attr.columns
+        assert columns is not None
         return [["COLUMN", alias, column] for column in columns]
 
 
 class ObjectAttrMonad(ObjectMixin, AttrMonad):
-    def __init__(self, parent, attr):
+    tableref: TableRef | JoinedTableRef | _typeshed.MaybeNone
+
+    def __init__(
+        self, parent: ObjectAttrMonad | ObjectIterMonad, attr: Attribute
+    ) -> None:
         AttrMonad.__init__(self, parent, attr)
         translator = self.translator
         parent_monad = self.parent
@@ -3249,8 +3738,42 @@ class ArrayAttrMonad(ArrayMixin, AttrMonad):
 
 
 class ParamMonad(Monad):
+    paramkey: ParamKey
+
+    @overload
     @staticmethod
-    def new(t, paramkey):
+    def new(t: type[Numeric], paramkey: ParamKey) -> NumericParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[str], paramkey: ParamKey) -> StringParamMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        t: type[date], paramkey: ParamKey
+    ) -> DateParamMonad | DatetimeParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[time], paramkey: ParamKey) -> TimeParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[timedelta], paramkey: ParamKey) -> TimedeltaParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[bytes], paramkey: ParamKey) -> BufferParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[UUID], paramkey: ParamKey) -> UuidParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[Json], paramkey: ParamKey) -> JsonParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[Array], paramkey: ParamKey) -> ArrayParamMonad: ...
+    @overload
+    @staticmethod
+    def new(t: EntityMeta, paramkey: ParamKey) -> ObjectParamMonad: ...
+    @staticmethod
+    def new(t: PyType | EntityMeta, paramkey: ParamKey) -> ParamMonad:
         t = normalize_type(t)
         if t in numeric_types:
             cls = NumericParamMonad
@@ -3282,12 +3805,12 @@ class ParamMonad(Monad):
         result.aggregated = False
         return result
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs) -> Self:
         if cls is ParamMonad:
             assert False, "Abstract class"  # pragma: no cover
         return Monad.__new__(cls)
 
-    def __init__(self, t, paramkey):
+    def __init__(self, t: EntityMeta | PyType, paramkey: ParamKey) -> None:
         t = normalize_type(t)
         Monad.__init__(self, t, nullable=False)
         self.paramkey = paramkey
@@ -3297,12 +3820,28 @@ class ParamMonad(Monad):
         else:
             self.converter = None
 
-    def getsql(self, sqlquery=None):
+    def getsql(
+        self, sqlquery: SqlQuery | None = None
+    ) -> Sequence[
+        Sequence[
+            str
+            | ParamKey
+            | Converter
+            | None
+            | Sequence[str | ParamKey | Converter | None]
+        ]
+    ]:
         return [["PARAM", self.paramkey, self.converter]]
 
 
 class ObjectParamMonad(ObjectMixin, ParamMonad):
-    def __init__(self, entity, paramkey):
+    params: tuple[ParamKey, ...]
+
+    def __init__(
+        self,
+        entity: EntityMeta,
+        paramkey: ParamKey,
+    ) -> None:
         ParamMonad.__init__(self, entity, paramkey)
         if self.translator.database is not entity._database_:
             assert self.translator.database is entity._database_, (
@@ -3314,7 +3853,9 @@ class ObjectParamMonad(ObjectMixin, ParamMonad):
         assert j is None
         self.params = tuple((varkey, i, j) for j in range(len(entity._pk_converters_)))
 
-    def getsql(self, sqlquery=None):
+    def getsql(
+        self, sqlquery: SqlQuery | None = None
+    ) -> Sequence[Sequence[str | ParamKey | Converter]]:
         entity = self.type
         assert len(self.params) == len(entity._pk_converters_)
         return [
@@ -3359,24 +3900,69 @@ class UuidParamMonad(UuidMixin, ParamMonad):
 
 
 class ArrayParamMonad(ArrayMixin, ParamMonad):
-    def __init__(self, t, paramkey, list_monad=None):
+    list_monad: ListMonad | None
+
+    def __init__(
+        self, t: type[Array], paramkey: ParamKey, list_monad: ListMonad | None = None
+    ) -> None:
         ParamMonad.__init__(self, t, paramkey)
         self.list_monad = list_monad
 
-    def contains(self, key, not_in=False):
+    def contains(self, key: Monad, not_in: bool = False) -> BoolExprMonad:
         if key.type is self.type.item_type:
+            assert self.list_monad is not None
             return self.list_monad.contains(key, not_in)
         return ArrayMixin.contains(self, key, not_in)
 
 
 class JsonParamMonad(JsonMixin, ParamMonad):
-    def getsql(self, sqlquery=None):
-        return [["JSON_PARAM", ParamMonad.getsql(self)[0]]]
+    def getsql(
+        self, sqlquery: SqlQuery | None = None
+    ) -> Sequence[Sequence[str | Sequence[str | ParamKey | Converter | None]]]:
+        return [
+            [
+                "JSON_PARAM",
+                cast(
+                    "Sequence[str | ParamKey | Converter | None]",
+                    ParamMonad.getsql(self)[0],
+                ),
+            ]
+        ]
 
 
 class ExprMonad(Monad):
+    sql: _Sql
+
+    @overload
     @staticmethod
-    def new(t, sql, nullable=True):
+    def new(t: type[Numeric], sql: _Sql, nullable: bool = True) -> NumericExprMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[str], sql: _Sql, nullable: bool = True) -> StringExprMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        t: type[date], sql: _Sql, nullable: bool = True
+    ) -> DateExprMonad | DatetimeExprMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[time], sql: _Sql, nullable: bool = True) -> TimeExprMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        t: type[timedelta], sql: _Sql, nullable: bool = True
+    ) -> TimedeltaExprMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[Json], sql: _Sql, nullable: bool = True) -> JsonExprMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[Array], sql: _Sql, nullable: bool = True) -> ArrayExprMonad: ...
+    @overload
+    @staticmethod
+    def new(t: type[Entity], sql: _Sql, nullable: bool = True) -> ObjectExprMonad: ...
+    @staticmethod
+    def new(t: _ExprMonadType, sql: _Sql, nullable: bool = True) -> ExprMonad:
         if t in numeric_types:
             cls = NumericExprMonad
         elif t is str:
@@ -3399,21 +3985,21 @@ class ExprMonad(Monad):
             throw(NotImplementedError, t)  # pragma: no cover
         return cls(t, sql, nullable=nullable)
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs) -> Self:
         if cls is ExprMonad:
             assert False, "Abstract class"  # pragma: no cover
         return Monad.__new__(cls)
 
-    def __init__(self, type, sql, nullable=True):
+    def __init__(self, type: PyType, sql: _Sql, nullable: bool = True) -> None:
         Monad.__init__(self, type, nullable=nullable)
         self.sql = sql
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[_Sql] | _Sql:
         return [self.sql]
 
 
 class ObjectExprMonad(ObjectMixin, ExprMonad):
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> _Sql:
         return self.sql
 
 
@@ -3450,7 +4036,13 @@ class ArrayExprMonad(ArrayMixin, ExprMonad):
 
 
 class JsonItemMonad(JsonMixin, Monad):
-    def __init__(self, parent, key):
+    parent: JsonItemMonad | JsonAttrMonad
+
+    def __init__(
+        self,
+        parent: JsonItemMonad | JsonAttrMonad,
+        key: EllipsisMonad | NumericMixin | StringMixin | slice,
+    ) -> None:
         assert isinstance(parent, JsonMixin), parent
         Monad.__init__(self, Json)
         self.parent = parent
@@ -3463,6 +4055,7 @@ class JsonItemMonad(JsonMixin, Monad):
         ):
             self.key_ast = key.getsql()[0]
         else:
+            assert isinstance(key, Monad)
             throw(TypeError, "Invalid JSON path item: %s" % ast2src(key.node))
         translator = self.translator
         if (
@@ -3475,23 +4068,28 @@ class JsonItemMonad(JsonMixin, Monad):
                 % translator.dialect,
             )
 
-    def get_path(self):
+    def get_path(self) -> tuple[JsonMixin, list]:
         path = []
         while isinstance(self, JsonItemMonad):
             path.append(self.key_ast)
-            self = self.parent
         path.reverse()
         return self, path
 
-    def to_int(self):
+    def to_int(self) -> NumericExprMonad:
         return self.cast_from_json(int)
 
-    def to_str(self):
+    def to_str(self) -> StringExprMonad:
         return self.cast_from_json(str)
 
-    def to_real(self):
+    def to_real(self) -> NumericExprMonad:
         return self.cast_from_json(float)
 
+    @overload
+    def cast_from_json(self, type: type[Json]) -> Self: ...
+    @overload
+    def cast_from_json(self, type: type[str]) -> StringExprMonad: ...
+    @overload
+    def cast_from_json(self, type: type[float]) -> NumericExprMonad: ...
     def cast_from_json(self, type):
         translator = self.translator
         if issubclass(type, Json):
@@ -3504,9 +4102,11 @@ class JsonItemMonad(JsonMixin, Monad):
             return self
         base_monad, path = self.get_path()
         sql = ["JSON_VALUE", base_monad.getsql()[0], path, type]
-        return ExprMonad.new(Json if type is NoneType else type, sql)
+        if type is NoneType:
+            return ExprMonad.new(Json, sql)
+        return ExprMonad.new(cast("_ExprMonadType", type), sql)
 
-    def getsql(self):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str | list | None]]:
         base_monad, path = self.get_path()
         base_sql = base_monad.getsql()[0]
         translator = self.translator
@@ -3515,11 +4115,61 @@ class JsonItemMonad(JsonMixin, Monad):
         return [["JSON_QUERY", base_sql, path]]
 
 
-class ConstMonad(Monad):
+class ConstMonad(Monad, Generic[_CT]):
+    value: _CT
+
+    @overload
+    @staticmethod
+    def new(value: tuple) -> ListMonad: ...
+    @overload
+    @staticmethod
+    def new(value: Numeric) -> NumericConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: str) -> StringConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: date) -> DateConstMonad | DatetimeConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: time) -> TimeConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: timedelta) -> TimedeltaConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: None) -> NoneMonad: ...
+    @overload
+    @staticmethod
+    def new(value: bytes) -> BufferConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: Json) -> JsonConstMonad: ...
+    @overload
+    @staticmethod
+    def new(value: types.EllipsisType) -> EllipsisMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        value: object,
+    ) -> (
+        ListMonad
+        | NumericConstMonad
+        | StringConstMonad
+        | DateConstMonad
+        | DatetimeConstMonad
+        | TimeConstMonad
+        | TimedeltaConstMonad
+        | NoneMonad
+        | BufferConstMonad
+        | JsonConstMonad
+        | EllipsisMonad
+    ): ...
     @staticmethod
     def new(value):
         value_type, value = normalize(value)
         if isinstance(value_type, tuple):
+            assert isinstance(value, tuple)
             return ListMonad([ConstMonad.new(item) for item in value])
         elif value_type in numeric_types:
             cls = NumericConstMonad
@@ -3547,142 +4197,147 @@ class ConstMonad(Monad):
         result.aggregated = False
         return result
 
-    def __new__(cls, *args):
+    def __new__(cls, *args) -> Self:
         if cls is ConstMonad:
             assert False, "Abstract class"  # pragma: no cover
         return Monad.__new__(cls)
 
-    def __init__(self, value):
+    def __init__(self, value: _CT) -> None:
         value_type, value = normalize(value)
         Monad.__init__(self, value_type, nullable=value_type is NoneType)
         self.value = value
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[Sequence[str | _CT]]:
         return [["VALUE", self.value]]
 
 
-class NoneMonad(ConstMonad):
+class NoneMonad(ConstMonad[None]):
     type = NoneType
 
-    def __init__(self, value=None):
+    def __init__(self, value: None = None) -> None:
         assert value is None
         ConstMonad.__init__(self, value)
 
-    def cmp(self, op, monad2):
+    def cmp(self, op: str, monad2: Monad) -> CmpMonad:
         return CmpMonad(op, self, monad2)
 
-    def contains(self, item, not_in=False):
+    def contains(self, item: Monad, not_in: bool = False) -> NoneMonad:
         return NoneMonad()
 
-    def nonzero(self):
+    def nonzero(self) -> NoneMonad:
         return NoneMonad()
 
-    def negate(self):
+    def negate(self) -> NoneMonad:
         return NoneMonad()
 
     def getattr(self, attrname):
         return NoneMonad()
 
-    def len(self):
+    def len(self) -> NoneMonad:
         return NoneMonad()
 
-    def count(self, distinct=None):
+    def count(self, distinct: NumericConstMonad | None = None) -> NumericExprMonad:
         return NumericExprMonad(int, [["VALUE", 0]], nullable=False)
 
-    def aggregate(self, func_name, distinct=None, sep=None):
+    def aggregate(
+        self,
+        func_name: str,
+        distinct: NumericConstMonad | None = None,
+        sep: str | None = None,
+    ) -> NoneMonad:
         return NoneMonad()
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> NoneMonad:
         return NoneMonad()
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Monad | slice) -> NoneMonad:
         return NoneMonad()
 
-    def __add__(self, monad2):
+    def __add__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __sub__(self, monad2):
+    def __sub__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __mul__(self, monad2):
+    def __mul__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __truediv__(self, monad2):
+    def __truediv__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __floordiv__(self, monad2):
+    def __floordiv__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __pow__(self, monad2):
+    def __pow__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __neg__(self):
+    def __neg__(self) -> NoneMonad:
         return NoneMonad()
 
-    def __or__(self, monad2):
+    def __or__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __and__(self, monad2):
+    def __and__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def __xor__(self, monad2):
+    def __xor__(self, monad2: Monad) -> NoneMonad:
         return NoneMonad()
 
-    def abs(self):
+    def abs(self) -> NoneMonad:
         return NoneMonad()
 
-    def to_int(self):
+    def to_int(self) -> NoneMonad:
         return NoneMonad()
 
-    def to_str(self):
+    def to_str(self) -> NoneMonad:
         return NoneMonad()
 
-    def to_real(self):
+    def to_real(self) -> NoneMonad:
         return NoneMonad()
 
 
-class EllipsisMonad(ConstMonad):
+class EllipsisMonad(ConstMonad[Ellipsis]):
     pass
 
 
-class StringConstMonad(StringMixin, ConstMonad):
-    def len(self):
+class StringConstMonad(StringMixin, ConstMonad[str]):
+    def len(self) -> NumericConstMonad:
         return ConstMonad.new(len(self.value))
 
 
-class JsonConstMonad(JsonMixin, ConstMonad):
+class JsonConstMonad(JsonMixin, ConstMonad[Json]):
     pass
 
 
-class BufferConstMonad(BufferMixin, ConstMonad):
+class BufferConstMonad(BufferMixin, ConstMonad[bytes]):
     pass
 
 
-class NumericConstMonad(NumericMixin, ConstMonad):
+class NumericConstMonad(NumericMixin, ConstMonad[Numeric]):
     pass
 
 
-class DateConstMonad(DateMixin, ConstMonad):
+class DateConstMonad(DateMixin, ConstMonad[date]):
     pass
 
 
-class TimeConstMonad(TimeMixin, ConstMonad):
+class TimeConstMonad(TimeMixin, ConstMonad[time]):
     pass
 
 
-class TimedeltaConstMonad(TimedeltaMixin, ConstMonad):
+class TimedeltaConstMonad(TimedeltaMixin, ConstMonad[timedelta]):
     pass
 
 
-class DatetimeConstMonad(DatetimeMixin, ConstMonad):
+class DatetimeConstMonad(DatetimeMixin, ConstMonad[datetime]):
     pass
 
 
 class BoolMonad(Monad):
-    def __init__(self, nullable=True):
+    def __init__(self, nullable: bool | None = True) -> None:
         Monad.__init__(self, bool, nullable=nullable)
 
-    def nonzero(self):
+    def nonzero(self) -> Self:
         return self
 
 
@@ -3697,15 +4352,24 @@ sql_negation.update((value, key) for key, value in list(sql_negation.items()))
 
 
 class BoolExprMonad(BoolMonad):
-    def __init__(self, sql, nullable=True):
+    sql: Sequence[str | bool | list]
+
+    def __init__(
+        self,
+        sql: Sequence[str | bool | list],
+        nullable: bool = True,
+    ) -> None:
         BoolMonad.__init__(self, nullable=nullable)
         self.sql = sql
 
-    def getsql(self, sqlquery=None):
+    def getsql(
+        self, sqlquery: SqlQuery | None = None
+    ) -> Sequence[Sequence[str | bool | list]]:
         return [self.sql]
 
-    def negate(self):
+    def negate(self) -> BoolMonad:
         sql = self.sql
+        assert isinstance(sql, list)
         sqlop = sql[0]
         negated_op = sql_negation.get(sqlop)
         if negated_op is not None:
@@ -3725,10 +4389,15 @@ cmp_negate.update((b, a) for a, b in list(cmp_negate.items()))
 
 
 class CmpMonad(BoolMonad):
-    EQ = "EQ"
-    NE = "NE"
+    op: str
+    aggregated: bool
+    left: Monad
+    right: Monad
 
-    def __init__(self, op, left, right):
+    EQ: ClassVar[str] = "EQ"
+    NE: ClassVar[str] = "NE"
+
+    def __init__(self, op: str, left: Monad, right: Monad) -> None:
         if op == "<>":
             op = "!="
         if left.type is NoneType:
@@ -3758,10 +4427,10 @@ class CmpMonad(BoolMonad):
         self.left = left
         self.right = right
 
-    def negate(self):
+    def negate(self) -> CmpMonad:
         return CmpMonad(cmp_negate[self.op], self.left, self.right)
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[Sequence[str | list]]:
         op = self.op
         if (
             self.left.type is NoneType and self.right.type is NoneType
@@ -3798,7 +4467,12 @@ class CmpMonad(BoolMonad):
 
 
 class LogicalBinOpMonad(BoolMonad):
-    def __init__(self, operands):
+    binop: LiteralString
+
+    def __init__(
+        self,
+        operands: Sequence[BoolMonad | NumericMixin],
+    ) -> None:
         assert len(operands) >= 2
         items = []
         for operand in operands:
@@ -3812,7 +4486,7 @@ class LogicalBinOpMonad(BoolMonad):
         BoolMonad.__init__(self, nullable=nullable)
         self.operands = items
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[Sequence[str | list]]:
         result = [self.binop]
         for operand in self.operands:
             operand_sql = operand.getsql()
@@ -3830,27 +4504,37 @@ class OrMonad(LogicalBinOpMonad):
 
 
 class NotMonad(BoolMonad):
-    def __init__(self, operand):
+    operant: BoolMonad
+
+    def __init__(self, operand: BoolMonad) -> None:
         if operand.type is not bool:
             operand = operand.nonzero()
         BoolMonad.__init__(self, nullable=operand.nullable)
         self.operand = operand
 
-    def negate(self):
+    def negate(self) -> BoolMonad:
         return self.operand
 
-    def getsql(self, sqlquery=None):
+    def getsql(
+        self, sqlquery: SqlQuery | None = None
+    ) -> list[
+        list[
+            str
+            | list[str | list[str | int]]
+            | list[str | list[str | list[str] | list[list[str]]]]
+        ]
+    ]:
         return [["NOT", self.operand.getsql()[0]]]
 
 
 class HybridFuncMonad(Monad):
-    def __init__(self, func_type, func_name, *params):
+    def __init__(self, func_type: FuncType, func_name: str, *params) -> None:
         Monad.__init__(self, func_type)
         self.func = func_type.func
         self.func_name = func_name
         self.params = params
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> Monad:
         translator = self.translator
         name_mapping = inspect.getcallargs(self.func, *(self.params + args), **kwargs)
 
@@ -3893,6 +4577,7 @@ class HybridFuncMonad(Monad):
             if func.__closure__:
                 translator.can_be_cached = False
             if func_extractors:
+                assert root_translator.vars is not None
                 root_translator.func_extractors_map[func] = func_extractors
                 root_translator.func_vartypes.update(func_vartypes)
                 root_translator.vartypes.update(func_vartypes)
@@ -3919,7 +4604,7 @@ class HybridFuncMonad(Monad):
 
 
 class HybridMethodMonad(HybridFuncMonad):
-    def __init__(self, parent, attrname, func):
+    def __init__(self, parent: ObjectIterMonad, attrname: str, func: Callable) -> None:
         entity = parent.type
         assert isinstance(entity, EntityMeta)
         func_name = "%s.%s" % (entity.__name__, attrname)
@@ -3930,7 +4615,12 @@ registered_functions = SQLTranslator.registered_functions = {}
 
 
 class FuncMonadMeta(MonadMeta):
-    def __new__(meta, cls_name, bases, cls_dict):
+    def __new__(
+        meta: type[_typeshed.Self],
+        cls_name: str,
+        bases: tuple[type[Monad], ...],
+        cls_dict: dict[str, str | type[AttrValue] | Callable | tuple],
+    ) -> type[_typeshed.Self]:
         func = cls_dict.get("func")
         monad_cls = super().__new__(meta, cls_name, bases, cls_dict)
         if func:
@@ -3938,13 +4628,14 @@ class FuncMonadMeta(MonadMeta):
                 functions = func
             else:
                 functions = (func,)
+            assert isinstance(functions, tuple)
             for func in functions:
                 registered_functions[func] = monad_cls
         return monad_cls
 
 
 class FuncMonad(Monad, metaclass=FuncMonadMeta):
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> Monad:
         for arg in args:
             assert isinstance(arg, Monad)
         for value in kwargs.values():
@@ -3954,8 +4645,11 @@ class FuncMonad(Monad, metaclass=FuncMonadMeta):
         except TypeError as exc:
             reraise_improved_typeerror(exc, "call", self.type.__name__)
 
+    def call(self, *args, **kwargs) -> Any:
+        throw(NotImplementedError)
 
-def get_classes(classinfo):
+
+def get_classes(classinfo: EntityMonad | ListMonad) -> Iterator[EntityMeta]:
     if isinstance(classinfo, EntityMonad):
         yield classinfo.type.item_type
     elif isinstance(classinfo, ListMonad):
@@ -3966,9 +4660,11 @@ def get_classes(classinfo):
 
 
 class FuncIsinstanceMonad(FuncMonad):
-    func = isinstance
+    func: ClassVar[Callable[..., bool]] = isinstance
 
-    def call(self, obj, classinfo):
+    def call(
+        self, obj: ObjectMixin, classinfo: EntityMonad | ListMonad
+    ) -> BoolExprMonad:
         if not isinstance(obj, ObjectMixin):
             throw(
                 ValueError,
@@ -3998,9 +4694,14 @@ class FuncIsinstanceMonad(FuncMonad):
 
 
 class FuncBufferMonad(FuncMonad):
-    func = buffer
+    func: ClassVar[Callable[..., bytes]] = buffer
 
-    def call(self, source, encoding=None, errors=None):
+    def call(
+        self,
+        source: StringConstMonad | str,
+        encoding: StringConstMonad | str | None = None,
+        errors: StringConstMonad | str | None = None,
+    ) -> ConstMonad[bytes]:
         if not isinstance(source, StringConstMonad):
             throw(TypeError)
         source = source.value
@@ -4022,44 +4723,44 @@ class FuncBufferMonad(FuncMonad):
 
 
 class FuncBoolMonad(FuncMonad):
-    func = bool
+    func: ClassVar[Callable[..., bool]] = bool
 
     def call(self, x):
         return x.nonzero()
 
 
 class FuncIntMonad(FuncMonad):
-    func = int
+    func: ClassVar[Callable[..., int]] = int
 
-    def call(self, x):
-        return x.to_int()
+    def call(self, x: JsonItemMonad | StringExprMonad) -> NumericExprMonad:
+        return cast("NumericExprMonad", x.to_int())
 
 
 class FuncStrMonad(FuncMonad):
-    func = str
+    func: ClassVar[Callable[..., str]] = str
 
-    def call(self, x):
-        return x.to_str()
+    def call(self, x: StringAttrMonad) -> StringExprMonad:
+        return cast("StringExprMonad", x.to_str())
 
 
 class FuncFloatMonad(FuncMonad):
-    func = float
+    func: ClassVar[Callable[..., float]] = float
 
-    def call(self, x):
-        return x.to_real()
+    def call(self, x: NumericAttrMonad) -> NumericExprMonad:
+        return cast("NumericExprMonad", x.to_real())
 
 
 class FuncDecimalMonad(FuncMonad):
-    func = Decimal
+    func: ClassVar[Callable[..., Decimal]] = Decimal
 
-    def call(self, x):
+    def call(self, x: StringConstMonad) -> NumericConstMonad:
         if not isinstance(x, StringConstMonad):
             throw(TypeError)
         return ConstMonad.new(Decimal(x.value))
 
 
 class FuncDateMonad(FuncMonad):
-    func = date
+    func: ClassVar[Callable[..., date]] = date
 
     def call(self, year, month, day):
         for arg, name in zip((year, month, day), ("year", "month", "day")):
@@ -4078,9 +4779,9 @@ class FuncDateMonad(FuncMonad):
 
 
 class FuncTimeMonad(FuncMonad):
-    func = time
+    func: ClassVar[Callable[..., time]] = time
 
-    def call(self, *args):
+    def call(self, *args) -> TimeConstMonad:
         for arg, name in zip(args, ("hour", "minute", "second", "microsecond")):
             if not isinstance(arg, NumericMixin) or arg.type is not int:
                 throw(
@@ -4094,18 +4795,18 @@ class FuncTimeMonad(FuncMonad):
 
 
 class FuncTimedeltaMonad(FuncMonad):
-    func = timedelta
+    func: ClassVar[Callable[..., timedelta]] = timedelta
 
     def call(
         self,
-        days=None,
-        seconds=None,
-        microseconds=None,
-        milliseconds=None,
-        minutes=None,
-        hours=None,
-        weeks=None,
-    ):
+        days: NumericConstMonad | None = None,
+        seconds: NumericConstMonad | None = None,
+        microseconds: NumericConstMonad | None = None,
+        milliseconds: NumericConstMonad | None = None,
+        minutes: NumericConstMonad | None = None,
+        hours: NumericConstMonad | None = None,
+        weeks: NumericConstMonad | None = None,
+    ) -> TimedeltaConstMonad:
         args = days, seconds, microseconds, milliseconds, minutes, hours, weeks
         for arg, name in zip(
             args,
@@ -4134,11 +4835,18 @@ class FuncTimedeltaMonad(FuncMonad):
 
 
 class FuncDatetimeMonad(FuncDateMonad):
-    func = datetime
+    func: ClassVar[Callable[..., datetime]] = datetime
 
     def call(
-        self, year, month, day, hour=None, minute=None, second=None, microsecond=None
-    ):
+        self,
+        year: NumericConstMonad,
+        month: StringConstMonad | NumericConstMonad,
+        day: NumericConstMonad,
+        hour: NumericConstMonad | None = None,
+        minute: NumericConstMonad | None = None,
+        second: NumericConstMonad | None = None,
+        microsecond: NumericConstMonad | None = None,
+    ) -> DatetimeConstMonad:
         args = year, month, day, hour, minute, second, microsecond
         for arg, name in zip(
             args, ("year", "month", "day", "hour", "minute", "second", "microsecond")
@@ -4154,16 +4862,16 @@ class FuncDatetimeMonad(FuncDateMonad):
             if not isinstance(arg, ConstMonad):
                 throw(NotImplementedError)
         value = datetime(*(arg.value if arg is not None else 0 for arg in args))
-        return ConstMonad.new(value)
+        return cast("DatetimeConstMonad", ConstMonad.new(value))
 
     def call_now(self):
         return DatetimeExprMonad(datetime, ["NOW"], nullable=self.nullable)
 
 
 class FuncBetweenMonad(FuncMonad):
-    func = between
+    func: ClassVar[Callable[..., bool]] = between
 
-    def call(self, x, a, b):
+    def call(self, x: Monad, a: Monad, b: Monad) -> BoolExprMonad:
         check_comparable(x, a, "<")
         check_comparable(x, b, "<")
         if isinstance(x.type, EntityMeta):
@@ -4177,9 +4885,9 @@ class FuncBetweenMonad(FuncMonad):
 
 
 class FuncConcatMonad(FuncMonad):
-    func = concat
+    func: ClassVar[Callable[..., str]] = concat
 
-    def call(self, *args):
+    def call(self, *args) -> StringExprMonad:
         if len(args) < 2:
             throw(TranslationError, "concat() function requires at least two arguments")
         result_ast = ["CONCAT"]
@@ -4197,21 +4905,27 @@ class FuncConcatMonad(FuncMonad):
                 arg = arg.to_str()
             result_ast.extend(arg.getsql())
         return ExprMonad.new(
-            str, result_ast, nullable=any(arg.nullable for arg in args)
+            str, cast("_Sql", result_ast), nullable=any(arg.nullable for arg in args)
         )
 
 
 class FuncLenMonad(FuncMonad):
-    func = len
+    func: ClassVar[Callable[..., int]] = len
 
-    def call(self, x):
+    def call(self, x: Monad) -> NumericExprMonad:
         return x.len()
 
 
 class FuncGetattrMonad(FuncMonad):
-    func = getattr
+    func: ClassVar[Callable] = getattr
 
-    def call(self, obj_monad, name_monad):
+    def call(
+        self,
+        obj_monad: AttrSetMonad | StringAttrMonad | ObjectIterMonad,
+        name_monad: (
+            NumericParamMonad | StringConstMonad | StringAttrMonad | StringParamMonad
+        ),
+    ) -> Monad:
         if isinstance(name_monad, ConstMonad):
             attrname = name_monad.value
         elif isinstance(name_monad, ParamMonad):
@@ -4220,6 +4934,7 @@ class FuncGetattrMonad(FuncMonad):
             if key in translator.fixed_param_values:
                 attrname = translator.fixed_param_values[key]
             else:
+                assert translator.vars is not None
                 attrname = translator.vars[key]
                 translator.fixed_param_values[key] = attrname
         else:
@@ -4237,7 +4952,7 @@ class FuncGetattrMonad(FuncMonad):
 
 
 class FuncRawSQLMonad(FuncMonad):
-    func = raw_sql
+    func: ClassVar[Callable[..., RawSQL]] = raw_sql
 
     def call(self, *args):
         throw(
@@ -4248,9 +4963,26 @@ class FuncRawSQLMonad(FuncMonad):
 
 
 class FuncCountMonad(FuncMonad):
-    func = itertools.count, utils.count, core.count
+    func: ClassVar[
+        tuple[
+            Callable[..., int | itertools.count[int]],
+            Callable[..., int | itertools.count[int]],
+            Callable[..., int | itertools.count[int]],
+        ]
+    ] = (itertools.count, utils.count, core.count)
 
-    def call(self, x=None, distinct=None):
+    def call(
+        self,
+        x: (
+            AttrSetMonad
+            | NumericAttrMonad
+            | StringConstMonad
+            | QuerySetMonad
+            | ObjectIterMonad
+            | None
+        ) = None,
+        distinct: BoolExprMonad | NumericConstMonad | None = None,
+    ) -> ExprMonad:
         if isinstance(x, StringConstMonad) and x.value == "*":
             x = None
         if x is not None:
@@ -4261,30 +4993,58 @@ class FuncCountMonad(FuncMonad):
 
 
 class FuncAbsMonad(FuncMonad):
-    func = abs
+    func: ClassVar[Callable] = abs
 
-    def call(self, x):
+    def call(self, x: NumericAttrMonad) -> NumericExprMonad:
         return x.abs()
 
 
 class FuncSumMonad(FuncMonad):
-    func = sum, core.sum
+    func: ClassVar[
+        tuple[
+            Callable[[Iterable[Numeric]], Numeric],
+            Callable[[Iterable[Numeric]], Numeric],
+        ]
+    ] = (sum, core.sum)
 
-    def call(self, x, distinct=None):
+    def call(
+        self,
+        x: AttrSetMonad | NumericAttrMonad | QuerySetMonad,
+        distinct: NumericConstMonad | None = None,
+    ) -> ExprMonad | NoneMonad:
         return x.aggregate("SUM", distinct)
 
 
 class FuncAvgMonad(FuncMonad):
-    func = utils.avg, core.avg
+    func: ClassVar[
+        tuple[
+            Callable[[Iterable[float]], float | None],
+            Callable[[Iterable[float]], float | None],
+        ]
+    ] = (utils.avg, core.avg)
 
-    def call(self, x, distinct=None):
+    def call(
+        self,
+        x: AttrSetMonad | JsonItemMonad | NumericAttrMonad | QuerySetMonad,
+        distinct: NumericConstMonad | None = None,
+    ) -> ExprMonad | NoneMonad:
         return x.aggregate("AVG", distinct)
 
 
 class FuncGroupConcatMonad(FuncMonad):
-    func = utils.group_concat, core.group_concat
+    func: ClassVar[
+        tuple[
+            Callable[[Iterable | None, str], str | None],
+            Callable[[Iterable | None, str], str | None],
+        ]
+    ] = (utils.group_concat, core.group_concat)
 
-    def call(self, x, sep=None, distinct=None):
+    def call(
+        self,
+        x: AttrSetMonad | NumericAttrMonad | QuerySetMonad,
+        sep: StringConstMonad | str | None = None,
+        distinct: NumericConstMonad | None = None,
+    ) -> ExprMonad | NoneMonad:
         if sep is not None:
             if distinct and self.translator.database.provider.dialect == "SQLite":
                 throw(
@@ -4292,6 +5052,7 @@ class FuncGroupConcatMonad(FuncMonad):
                     "SQLite does not allow to specify distinct and separator in group_concat at the same time: {EXPR}",
                 )
             if not (isinstance(sep, StringConstMonad) and isinstance(sep.value, str)):
+                assert isinstance(sep, Monad)
                 throw(
                     TypeError,
                     "`sep` option of `group_concat` should be type of str. Got: %s"
@@ -4302,9 +5063,9 @@ class FuncGroupConcatMonad(FuncMonad):
 
 
 class FuncCoalesceMonad(FuncMonad):
-    func = coalesce
+    func: ClassVar[Callable[[Sequence[OptAttrValue]], OptAttrValue]] = coalesce
 
-    def call(self, *args):
+    def call(self, *args) -> ExprMonad:
         if len(args) < 2:
             throw(
                 TranslationError, "coalesce() function requires at least two arguments"
@@ -4327,13 +5088,25 @@ class FuncCoalesceMonad(FuncMonad):
         sql = [["COALESCE"] + coalesce_args for coalesce_args in result]
         if not isinstance(t, EntityMeta):
             sql = sql[0]
-        return ExprMonad.new(t, sql, nullable=all(arg.nullable for arg in args))
+        return ExprMonad.new(
+            cast("_ExprMonadType", t),
+            cast("_Sql", sql),
+            nullable=all(arg.nullable for arg in args),
+        )
 
 
 class FuncDistinctMonad(FuncMonad):
-    func = utils.distinct, core.distinct
+    func: ClassVar[
+        tuple[
+            Callable[[Sequence], defaultdict[Any, int]],
+            Callable[[Sequence], defaultdict[Any, int]],
+        ]
+    ] = (
+        utils.distinct,
+        core.distinct,
+    )
 
-    def call(self, x):
+    def call(self, x: Monad) -> MonadMixin:
         if isinstance(x, SetMixin):
             return x.call_distinct()
         if not isinstance(x, NumericMixin):
@@ -4345,9 +5118,9 @@ class FuncDistinctMonad(FuncMonad):
 
 
 class FuncMinMonad(FuncMonad):
-    func = min, core.min
+    func: ClassVar[tuple[Callable, Callable]] = (min, core.min)
 
-    def call(self, *args):
+    def call(self, *args) -> ExprMonad:
         if not args:
             throw(TypeError, "min() function expected at least one argument")
         if len(args) == 1:
@@ -4356,9 +5129,9 @@ class FuncMinMonad(FuncMonad):
 
 
 class FuncMaxMonad(FuncMonad):
-    func = max, core.max
+    func: ClassVar[tuple[Callable, Callable]] = max, core.max
 
-    def call(self, *args):
+    def call(self, *args) -> ExprMonad:
         if not args:
             throw(TypeError, "max() function expected at least one argument")
         if len(args) == 1:
@@ -4366,7 +5139,7 @@ class FuncMaxMonad(FuncMonad):
         return minmax(self, "MAX", *args)
 
 
-def minmax(monad, sqlop, *args):
+def minmax(monad: FuncMaxMonad | FuncMinMonad, sqlop: str, *args) -> ExprMonad:
     assert len(args) > 1
     translator = monad.translator
     t = args[0].type
@@ -4393,14 +5166,16 @@ def minmax(monad, sqlop, *args):
                 args[i] = NumericExprMonad(
                     int, ["TO_INT", arg.getsql()[0]], nullable=arg.nullable
                 )
-    sql = [sqlop, None] + [arg.getsql()[0] for arg in args]
-    return ExprMonad.new(t, sql, nullable=any(arg.nullable for arg in args))
+    sql = cast("_Sql", [sqlop, None] + [arg.getsql()[0] for arg in args])
+    return ExprMonad.new(
+        cast("_ExprMonadType", t), sql, nullable=any(arg.nullable for arg in args)
+    )
 
 
 class FuncSelectMonad(FuncMonad):
-    func = core.select
+    func: ClassVar[Callable[..., Query]] = core.select
 
-    def call(self, queryset):
+    def call(self, queryset: QuerySetMonad) -> QuerySetMonad:
         if not isinstance(queryset, QuerySetMonad):
             throw(
                 TypeError, "'select' function expects generator expression, got: {EXPR}"
@@ -4409,9 +5184,9 @@ class FuncSelectMonad(FuncMonad):
 
 
 class FuncExistsMonad(FuncMonad):
-    func = core.exists
+    func: ClassVar[Callable[..., bool]] = core.exists
 
-    def call(self, arg):
+    def call(self, arg: AttrSetMonad | QuerySetMonad) -> BoolExprMonad:
         if not isinstance(arg, SetMixin):
             throw(
                 TypeError,
@@ -4421,29 +5196,33 @@ class FuncExistsMonad(FuncMonad):
 
 
 class FuncDescMonad(FuncMonad):
-    func = core.desc
+    func: ClassVar[Callable[..., DescWrapper | Attribute | AttrValue]] = core.desc
 
-    def call(self, expr):
+    def call(self, expr: NumericAttrMonad | StringAttrMonad) -> DescMonad:
         return DescMonad(expr)
 
 
 class DescMonad(Monad):
-    def __init__(self, expr):
+    expr: NumericAttrMonad | StringAttrMonad
+
+    def __init__(self, expr: NumericAttrMonad | StringAttrMonad) -> None:
         Monad.__init__(self, expr.type, nullable=expr.nullable)
         self.expr = expr
 
-    def getsql(self):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[list[str] | str]]:
         return [["DESC", item] for item in self.expr.getsql()]
 
 
 class JoinMonad(Monad):
-    def __init__(self, type):
+    hint_join_prev: bool
+
+    def __init__(self, type: Callable) -> None:
         Monad.__init__(self, type)
         translator = self.translator
         self.hint_join_prev = translator.hint_join
         translator.hint_join = True
 
-    def __call__(self, x):
+    def __call__(self, x: CmpMonad | BoolExprMonad) -> BoolMonad:
         self.translator.hint_join = self.hint_join_prev
         return x
 
@@ -4452,27 +5231,29 @@ registered_functions[JOIN] = JoinMonad
 
 
 class FuncRandomMonad(FuncMonad):
-    func = random
+    func: ClassVar[Callable[[], float]] = random
 
-    def __init__(self, type):
+    def __init__(self, type: Callable) -> None:
         FuncMonad.__init__(self, type)
         self.translator.query_result_is_cacheable = False
 
-    def __call__(self):
+    def __call__(self) -> NumericExprMonad:
         return NumericExprMonad(float, ["RANDOM"], nullable=False)
 
 
 class SetMixin(MonadMixin):
-    forced_distinct = False
+    forced_distinct: bool = False
 
-    def call_distinct(self):
+    def call_distinct(self) -> SetMixin:
         new_monad = object.__new__(self.__class__)
         new_monad.__dict__.update(self.__dict__)
         new_monad.forced_distinct = True
         return new_monad
 
 
-def make_attrset_binop(op, sqlop):
+def make_attrset_binop(
+    op: str, sqlop: str
+) -> Callable[[Monad, Monad], NumericSetExprMonad]:
     def attrset_binop(monad, monad2):
         return NumericSetExprMonad(op, sqlop, monad, monad2)
 
@@ -4480,7 +5261,11 @@ def make_attrset_binop(op, sqlop):
 
 
 class AttrSetMonad(SetMixin, Monad):
-    def __init__(self, parent, attr):
+    parent: AttrSetMonad | ObjectIterMonad
+    sqlquery: SqlQuery | None
+    tableref: TableRef | None
+
+    def __init__(self, parent: AttrSetMonad | ObjectIterMonad, attr: Attribute) -> None:
         item_type = normalize_type(attr.py_type)
         Monad.__init__(self, SetType(item_type))
         self.parent = parent
@@ -4488,7 +5273,7 @@ class AttrSetMonad(SetMixin, Monad):
         self.sqlquery = None
         self.tableref = None
 
-    def cmp(self, op, monad2):
+    def cmp(self, op: str, monad2: Monad):
         if type(monad2.type) is SetType and are_comparable_types(
             self.type.item_type, monad2.type.item_type
         ):
@@ -4497,7 +5282,7 @@ class AttrSetMonad(SetMixin, Monad):
             check_comparable(self, monad2)
         throw(NotImplementedError)
 
-    def contains(self, item, not_in=False):
+    def contains(self, item: Monad, not_in: bool = False) -> BoolExprMonad:
         translator = self.translator
         check_comparable(item, self, "in")
         if not translator.hint_join:
@@ -4559,24 +5344,24 @@ class AttrSetMonad(SetMixin, Monad):
                 for column, expr in zip(columns, item.getsql())
             ]
             conditions.extend(sqlquery.conditions)
-            from_ast[-1][-1] = sqland([from_ast[-1][-1]] + conditions)
+            cast("list", from_ast[-1])[-1] = sqland([from_ast[-1][-1]] + conditions)
             expr_ast = sqland([["IS_NULL", expr] for expr in expr_list])
             return BoolExprMonad(expr_ast, nullable=False)
 
-    def getattr(self, name):
+    def getattr(self, attrname: str) -> Monad:
         try:
-            return Monad.getattr(self, name)
+            return Monad.getattr(self, attrname)
         except AttributeError:
             pass
         entity = self.type.item_type
         if not isinstance(entity, EntityMeta):
             throw(AttributeError)
-        attr = entity._adict_.get(name)
+        attr = entity._adict_.get(attrname)
         if attr is None:
             throw(AttributeError)
         return AttrSetMonad(self, attr)
 
-    def call_select(self):
+    def call_select(self) -> AttrSetMonad:
         # calling with lambda argument processed in preCall
         return self
 
@@ -4585,7 +5370,7 @@ class AttrSetMonad(SetMixin, Monad):
     def call_exists(self):
         return self
 
-    def requires_distinct(self, joined=False, for_count=False):
+    def requires_distinct(self, joined: bool = False, for_count: bool = False) -> bool:
         if self.parent.requires_distinct(joined):
             return True
         reverse = self.attr.reverse
@@ -4599,9 +5384,9 @@ class AttrSetMonad(SetMixin, Monad):
                 return True
         return False
 
-    def count(self, distinct=None):
+    def count(self, distinct: NumericConstMonad | None = None) -> ExprMonad:
         translator = self.translator
-        distinct = distinct_from_monad(
+        distinct_from_monad(
             distinct,
             self.requires_distinct(joined=translator.hint_join, for_count=True),
         )
@@ -4614,6 +5399,7 @@ class AttrSetMonad(SetMixin, Monad):
 
         sql_ast = make_aggr = None
         extra_grouping = False
+        assert self.tableref is not None
         if not distinct and self.tableref.name_path != translator.optimize:
             make_aggr = lambda expr_list: ["COUNT", None]
         elif len(expr_list) == 1:
@@ -4642,6 +5428,11 @@ class AttrSetMonad(SetMixin, Monad):
         elif translator.row_value_syntax:
             make_aggr = lambda expr_list: ["COUNT", True] + expr_list
         elif translator.dialect == "SQLite":
+            from pony.orm.dbproviders.sqlite import (
+                SQLiteTranslator as SQLiteTranslatorType,
+            )
+
+            assert isinstance(translator, SQLiteTranslatorType)
             if not distinct:
                 alias, pk_columns = self.tableref.make_join(pk_only=True)
                 make_aggr = lambda expr_list: [
@@ -4698,8 +5489,13 @@ class AttrSetMonad(SetMixin, Monad):
 
     len = count
 
-    def aggregate(self, func_name, distinct=None, sep=None):
-        distinct = distinct_from_monad(
+    def aggregate(
+        self,
+        func_name: str,
+        distinct: NumericConstMonad | None = None,
+        sep: str | None = None,
+    ) -> ExprMonad:
+        distinct_value = distinct_from_monad(
             distinct, default=self.forced_distinct and func_name in ("SUM", "AVG")
         )
         translator = self.translator
@@ -4729,7 +5525,7 @@ class AttrSetMonad(SetMixin, Monad):
             assert False  # pragma: no cover
 
         def make_aggr(expr_list):
-            result = [func_name, distinct] + expr_list
+            result = [func_name, distinct_value] + expr_list
             if sep is not None:
                 assert func_name == "GROUP_CONCAT"
                 result.append(["VALUE", sep])
@@ -4749,7 +5545,8 @@ class AttrSetMonad(SetMixin, Monad):
         elif func_name == "GROUP_CONCAT":
             result_type = str
         else:
-            result_type = item_type
+            result_type = cast("_ExprMonadType", item_type)
+        assert self.tableref is not None
         translator.aggregated_subquery_paths.add(self.tableref.name_path)
         result = ExprMonad.new(result_type, sql_ast, nullable=func_name != "SUM")
         if optimized:
@@ -4758,7 +5555,7 @@ class AttrSetMonad(SetMixin, Monad):
             result.nogroup = True
         return result
 
-    def nonzero(self):
+    def nonzero(self) -> BoolExprMonad:
         sqlquery = self._subselect()
         sql_ast = [
             "EXISTS",
@@ -4767,7 +5564,7 @@ class AttrSetMonad(SetMixin, Monad):
         ]
         return BoolExprMonad(sql_ast, nullable=False)
 
-    def negate(self):
+    def negate(self) -> BoolExprMonad:
         sqlquery = self._subselect()
         sql_ast = [
             "NOT_EXISTS",
@@ -4778,7 +5575,9 @@ class AttrSetMonad(SetMixin, Monad):
 
     call_is_empty = negate
 
-    def make_tableref(self, sqlquery):
+    def make_tableref(
+        self, sqlquery: SqlQuery
+    ) -> TableRef | JoinedTableRef | ExprJoinedTableRef:
         parent = self.parent
         attr = self.attr
         if isinstance(parent, ObjectMixin):
@@ -4794,13 +5593,16 @@ class AttrSetMonad(SetMixin, Monad):
             )
         else:
             self.tableref = parent_tableref
+        assert self.tableref is not None
         self.tableref.can_affect_distinct = True
         return self.tableref
 
-    def make_expr_list(self):
+    def make_expr_list(self) -> list[list[str]]:
         attr = self.attr
         pk_only = attr.reverse or attr.pk_offset is not None
+        assert self.tableref is not None
         alias, columns = self.tableref.make_join(pk_only)
+        assert columns is not None
         if attr.reverse:
             pass
         elif pk_only:
@@ -4810,17 +5612,23 @@ class AttrSetMonad(SetMixin, Monad):
             columns = attr.columns
         return [["COLUMN", alias, column] for column in columns]
 
-    def _aggregated_scalar_subselect(self, make_aggr, extra_grouping=False):
+    def _aggregated_scalar_subselect(
+        self, make_aggr: Callable, extra_grouping: bool = False
+    ) -> tuple[list, bool]:
         translator = self.translator
         sqlquery = self._subselect()
         optimized = False
+        assert self.tableref is not None
         if translator.optimize == self.tableref.name_path:
             sql_ast = make_aggr(sqlquery.expr_list)
             optimized = True
             if not translator.from_optimized:
+                assert self.sqlquery is not None
                 from_ast = self.sqlquery.from_ast[1:]
                 assert sqlquery.outer_conditions
-                from_ast[0] = from_ast[0] + [sqland(sqlquery.outer_conditions)]
+                from_ast[0] = cast("list", from_ast[0]) + [
+                    sqland(sqlquery.outer_conditions)
+                ]
                 translator.sqlquery.from_ast.extend(from_ast)
                 translator.from_optimized = True
         else:
@@ -4835,8 +5643,11 @@ class AttrSetMonad(SetMixin, Monad):
         return sql_ast, optimized
 
     def _joined_subselect(
-        self, make_aggr, extra_grouping=False, coalesce_to_zero=False
-    ):
+        self,
+        make_aggr: Callable,
+        extra_grouping: bool = False,
+        coalesce_to_zero: bool = False,
+    ) -> tuple[list, bool]:
         translator = self.translator
         sqlquery = self._subselect()
         expr_list = sqlquery.expr_list
@@ -4906,7 +5717,9 @@ class AttrSetMonad(SetMixin, Monad):
             expr_ast = ["COALESCE", expr_ast, ["VALUE", 0]]
         return expr_ast, False
 
-    def _subselect(self, sqlquery=None, extract_outer_conditions=True):
+    def _subselect(
+        self, sqlquery: SqlQuery | None = None, extract_outer_conditions: bool = True
+    ) -> SqlQuery:
         if self.sqlquery is not None:
             return self.sqlquery
         attr = self.attr
@@ -4920,7 +5733,9 @@ class AttrSetMonad(SetMixin, Monad):
                 ["IS_NOT_NULL", expr] for expr in sqlquery.expr_list
             )
         if sqlquery is not translator.sqlquery and extract_outer_conditions:
+            assert isinstance(sqlquery.from_ast[1], list)
             outer_cond = sqlquery.from_ast[1].pop()
+            assert isinstance(outer_cond, list)
             if outer_cond[0] == "AND":
                 sqlquery.outer_conditions = outer_cond[1:]
             else:
@@ -4928,20 +5743,32 @@ class AttrSetMonad(SetMixin, Monad):
         self.sqlquery = sqlquery
         return sqlquery
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str]]:
         if sqlquery is None:
             sqlquery = self.translator.sqlquery
         self.make_tableref(sqlquery)
         return self.make_expr_list()
 
-    __add__ = make_attrset_binop("+", "ADD")
-    __sub__ = make_attrset_binop("-", "SUB")
-    __mul__ = make_attrset_binop("*", "MUL")
-    __truediv__ = make_attrset_binop("/", "DIV")
-    __floordiv__ = make_attrset_binop("//", "FLOORDIV")
+    __add__: Callable[[Monad, Monad], NumericSetExprMonad] = make_attrset_binop(
+        "+", "ADD"
+    )
+    __sub__: Callable[[Monad, Monad], NumericSetExprMonad] = make_attrset_binop(
+        "-", "SUB"
+    )
+    __mul__: Callable[[Monad, Monad], NumericSetExprMonad] = make_attrset_binop(
+        "*", "MUL"
+    )
+    __truediv__: Callable[[Monad, Monad], NumericSetExprMonad] = make_attrset_binop(
+        "/", "DIV"
+    )
+    __floordiv__: Callable[[Monad, Monad], NumericSetExprMonad] = make_attrset_binop(
+        "//", "FLOORDIV"
+    )
 
 
-def make_numericset_binop(op, sqlop):
+def make_numericset_binop(
+    op: str, sqlop: str
+) -> Callable[[Monad, Monad], NumericSetExprMonad]:
     def numericset_binop(monad, monad2):
         return NumericSetExprMonad(op, sqlop, monad, monad2)
 
@@ -4949,9 +5776,15 @@ def make_numericset_binop(op, sqlop):
 
 
 class NumericSetExprMonad(SetMixin, Monad):
-    def __init__(self, op, sqlop, left, right):
+    op: str
+    sqlop: str
+    left: Monad
+    right: Monad
+
+    def __init__(self, op: str, sqlop: str, left: Monad, right: Monad) -> None:
         result_type, left, right = coerce_monads(left, right)
         assert type(result_type) is SetType
+        assert isinstance(result_type, SetType)
         if result_type.item_type not in numeric_types:
             throw(
                 TypeError,
@@ -4963,15 +5796,22 @@ class NumericSetExprMonad(SetMixin, Monad):
         self.left = left
         self.right = right
 
-    def aggregate(self, func_name, distinct=None, sep=None):
-        distinct = distinct_from_monad(
+    def aggregate(
+        self,
+        func_name: str,
+        distinct: NumericConstMonad | None = None,
+        sep: str | None = None,
+    ) -> ExprMonad:
+        distinct_value = distinct_from_monad(
             distinct, default=self.forced_distinct and func_name in ("SUM", "AVG")
         )
         translator = self.translator
         sqlquery = SqlQuery(translator, translator.sqlquery)
         expr = self.getsql(sqlquery)[0]
         translator.aggregated_subquery_paths.add(self.tableref.name_path)
+        assert isinstance(sqlquery.from_ast[1], list)
         outer_cond = sqlquery.from_ast[1].pop()
+        assert isinstance(outer_cond, list)
         if outer_cond[0] == "AND":
             sqlquery.outer_conditions = outer_cond[1:]
         else:
@@ -4982,7 +5822,7 @@ class NumericSetExprMonad(SetMixin, Monad):
             result_type = str
         else:
             result_type = self.type.item_type
-        aggr_ast = [func_name, distinct, expr]
+        aggr_ast = [func_name, distinct_value, expr]
         if func_name == "GROUP_CONCAT":
             if sep is not None:
                 aggr_ast.append(["VALUE", sep])
@@ -4998,8 +5838,9 @@ class NumericSetExprMonad(SetMixin, Monad):
         else:
             if not translator.from_optimized:
                 from_ast = sqlquery.from_ast[1:]
-                assert sqlquery.outer_conditions
-                from_ast[0] = from_ast[0] + [sqland(sqlquery.outer_conditions)]
+                from_ast[0] = cast("list", from_ast[0]) + [
+                    sqland(sqlquery.outer_conditions)
+                ]
                 translator.sqlquery.from_ast.extend(from_ast)
                 translator.from_optimized = True
             sql_ast = aggr_ast
@@ -5007,7 +5848,7 @@ class NumericSetExprMonad(SetMixin, Monad):
             result.aggregated = True
         return result
 
-    def getsql(self, sqlquery=None):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str]]:
         if sqlquery is None:
             sqlquery = self.translator.sqlquery
         left, right = self.left, self.right
@@ -5033,17 +5874,31 @@ class NumericSetExprMonad(SetMixin, Monad):
         self.tableref = tableref
         return [[self.sqlop, left_expr, right_expr]]
 
-    __add__ = make_numericset_binop("+", "ADD")
-    __sub__ = make_numericset_binop("-", "SUB")
-    __mul__ = make_numericset_binop("*", "MUL")
-    __truediv__ = make_numericset_binop("/", "DIV")
-    __floordiv__ = make_numericset_binop("//", "FLOORDIV")
+    __add__: Callable[[Monad, Monad], NumericSetExprMonad] = make_numericset_binop(
+        "+", "ADD"
+    )
+    __sub__: Callable[[Monad, Monad], NumericSetExprMonad] = make_numericset_binop(
+        "-", "SUB"
+    )
+    __mul__: Callable[[Monad, Monad], NumericSetExprMonad] = make_numericset_binop(
+        "*", "MUL"
+    )
+    __truediv__: Callable[[Monad, Monad], NumericSetExprMonad] = make_numericset_binop(
+        "/", "DIV"
+    )
+    __floordiv__: Callable[[Monad, Monad], NumericSetExprMonad] = make_numericset_binop(
+        "//", "FLOORDIV"
+    )
 
 
 class QuerySetMonad(SetMixin, Monad):
-    nogroup = True
+    subtranslator: SQLTranslator
+    item_type: ExprType
+    limit: Numeric | None
+    nogroup: bool = True
+    offset: Numeric | None
 
-    def __init__(self, subtranslator):
+    def __init__(self, subtranslator: SQLTranslator) -> None:
         item_type = subtranslator.expr_type
         monad_type = SetType(item_type)
         Monad.__init__(self, monad_type)
@@ -5051,26 +5906,34 @@ class QuerySetMonad(SetMixin, Monad):
         self.item_type = item_type
         self.limit = self.offset = None
 
-    def to_single_cell_value(self):
-        return ExprMonad.new(self.item_type, self.getsql()[0])
+    def to_single_cell_value(self) -> ExprMonad:
+        return ExprMonad.new(
+            cast("_ExprMonadType", self.item_type), cast("_Sql", self.getsql()[0])
+        )
 
     def requires_distinct(self, joined=False):
         assert False
 
-    def call_limit(self, limit=None, offset=None):
+    def call_limit(
+        self,
+        limit: int | NumericConstMonad | NoneMonad | None = None,
+        offset: int | NumericConstMonad | None = None,
+    ) -> QuerySetMonad:
         if limit is not None and not isinstance(limit, int_types):
             if not isinstance(limit, (NoneMonad, NumericConstMonad)):
                 throw(TypeError, "`limit` parameter should be of int type")
-            limit = limit.value
+            self.limit = limit.value
+        else:
+            self.limit = limit
         if offset is not None and not isinstance(offset, int_types):
             if not isinstance(offset, (NoneMonad, NumericConstMonad)):
                 throw(TypeError, "`offset` parameter should be of int type")
-            offset = offset.value
-        self.limit = limit
-        self.offset = offset
+            self.offset = offset.value
+        else:
+            self.offset = offset
         return self
 
-    def contains(self, item, not_in=False):
+    def contains(self, item: Monad, not_in: bool = False) -> BoolExprMonad:
         translator = self.translator
         check_comparable(item, self, "in")
         if isinstance(item, ListMonad):
@@ -5097,6 +5960,7 @@ class QuerySetMonad(SetMixin, Monad):
             col_names = set()
             new_names = []
             for i, column_ast in enumerate(select_ast):
+                assert isinstance(select_ast, list) and isinstance(column_ast, list)
                 if not i:
                     continue  # 'ALL'
                 if column_ast[0] == "COLUMN":
@@ -5152,6 +6016,9 @@ class QuerySetMonad(SetMixin, Monad):
                     select_ast = subquery_ast[1]
                     expr_aliases = []
                     for i, expr_ast in enumerate(select_ast):
+                        assert isinstance(select_ast, list) and isinstance(
+                            expr_ast, list
+                        )
                         if i > 0:
                             if expr_ast[0] == "AS":
                                 expr_ast = expr_ast[1]
@@ -5184,11 +6051,12 @@ class QuerySetMonad(SetMixin, Monad):
                     having_ast = find_or_create_having_ast(subquery_ast)
                     having_ast += in_conditions
                 else:
+                    assert isinstance(where_ast, list)
                     where_ast += in_conditions
                 sql_ast = ["NOT_EXISTS" if not_in else "EXISTS"] + subquery_ast[2:]
         return BoolExprMonad(sql_ast, nullable=False)
 
-    def nonzero(self):
+    def nonzero(self) -> BoolExprMonad:
         subquery_ast = self.subtranslator.construct_subquery_ast(distinct=False)
         expr_monads = self.subtranslator.expr_monads
         if len(expr_monads) > 1:
@@ -5196,18 +6064,21 @@ class QuerySetMonad(SetMixin, Monad):
         expr_monad = expr_monads[0]
         if not isinstance(expr_monad, ObjectIterMonad):
             sql = expr_monad.nonzero().getsql()
+            assert isinstance(subquery_ast[3], list)
             assert subquery_ast[3][0] == "WHERE"
             subquery_ast[3].append(sql[0])
         subquery_ast = ["EXISTS"] + subquery_ast[2:]
         return BoolExprMonad(subquery_ast, nullable=False)
 
-    def negate(self):
+    def negate(self) -> BoolExprMonad:
         sql = self.nonzero().sql
         assert sql[0] == "EXISTS"
-        return BoolExprMonad(["NOT_EXISTS"] + sql[1:], nullable=False)
+        return BoolExprMonad(["NOT_EXISTS"] + list(sql[1:]), nullable=False)
 
-    def count(self, distinct=None):
-        distinct = distinct_from_monad(distinct)
+    def count(
+        self, distinct: NumericConstMonad | BoolExprMonad | None = None
+    ) -> ExprMonad:
+        distinct_value = distinct_from_monad(distinct)
         translator = self.translator
         sub = self.subtranslator
 
@@ -5219,12 +6090,12 @@ class QuerySetMonad(SetMixin, Monad):
 
         expr_type = sub.expr_type
         if isinstance(expr_type, (tuple, EntityMeta)):
-            if not sub.distinct and not distinct:
+            if not sub.distinct and not distinct_value:
                 select_ast = ["AGGREGATES", ["COUNT", None]]
             elif len(sub.expr_columns) == 1:
                 select_ast = [
                     "AGGREGATES",
-                    ["COUNT", True if distinct is None else distinct]
+                    ["COUNT", True if distinct_value is None else distinct_value]
                     + sub.expr_columns,
                 ]
             elif translator.dialect == "Oracle":
@@ -5238,10 +6109,15 @@ class QuerySetMonad(SetMixin, Monad):
             elif translator.row_value_syntax:
                 select_ast = [
                     "AGGREGATES",
-                    ["COUNT", True if distinct is None else distinct]
+                    ["COUNT", True if distinct_value is None else distinct_value]
                     + sub.expr_columns,
                 ]
             elif translator.dialect == "SQLite":
+                from pony.orm.dbproviders.sqlite import (
+                    SQLiteTranslator as SQLiteTranslatorType,
+                )
+
+                assert isinstance(translator, SQLiteTranslatorType)
                 if translator.sqlite_version < (3, 6, 21):
                     if sub.aggregated:
                         throw(TranslationError)
@@ -5254,7 +6130,7 @@ class QuerySetMonad(SetMixin, Monad):
                             "AGGREGATES",
                             [
                                 "COUNT",
-                                True if distinct is None else distinct,
+                                True if distinct_value is None else distinct_value,
                                 ["COLUMN", alias, "ROWID"],
                             ],
                         ],
@@ -5285,7 +6161,11 @@ class QuerySetMonad(SetMixin, Monad):
         elif len(sub.expr_columns) == 1:
             select_ast = [
                 "AGGREGATES",
-                ["COUNT", True if distinct is None else distinct, sub.expr_columns[0]],
+                [
+                    "COUNT",
+                    True if distinct is None else distinct,
+                    sub.expr_columns[0],
+                ],
             ]
         else:
             throw(NotImplementedError)  # pragma: no cover
@@ -5296,8 +6176,13 @@ class QuerySetMonad(SetMixin, Monad):
 
     len = count
 
-    def aggregate(self, func_name, distinct=None, sep=None):
-        distinct = distinct_from_monad(
+    def aggregate(
+        self,
+        func_name: str,
+        distinct: NumericConstMonad | None = None,
+        sep: str | None = None,
+    ) -> ExprMonad:
+        distinct_value = distinct_from_monad(
             distinct, default=self.forced_distinct and func_name in ("SUM", "AVG")
         )
         sub = self.subtranslator
@@ -5329,7 +6214,7 @@ class QuerySetMonad(SetMixin, Monad):
         else:
             assert False  # pragma: no cover
         assert len(sub.expr_columns) == 1
-        aggr_ast = [func_name, distinct, sub.expr_columns[0]]
+        aggr_ast = [func_name, distinct_value, sub.expr_columns[0]]
         if func_name == "GROUP_CONCAT":
             if sep is not None:
                 aggr_ast.append(["VALUE", sep])
@@ -5340,25 +6225,27 @@ class QuerySetMonad(SetMixin, Monad):
         elif func_name == "GROUP_CONCAT":
             result_type = str
         else:
-            result_type = expr_type
+            result_type = cast("_ExprMonadType", expr_type)
         return ExprMonad.new(result_type, sql_ast, func_name != "SUM")
 
-    def call_count(self, distinct=None):
+    def call_count(self, distinct: NumericConstMonad | None = None) -> ExprMonad:
         return self.count(distinct=distinct)
 
-    def call_sum(self, distinct=None):
+    def call_sum(self, distinct: NumericConstMonad | None = None) -> ExprMonad:
         return self.aggregate("SUM", distinct)
 
-    def call_min(self):
+    def call_min(self) -> ExprMonad:
         return self.aggregate("MIN")
 
-    def call_max(self):
+    def call_max(self) -> ExprMonad:
         return self.aggregate("MAX")
 
-    def call_avg(self, distinct=None):
+    def call_avg(self, distinct: NumericConstMonad | None = None) -> ExprMonad:
         return self.aggregate("AVG", distinct)
 
-    def call_group_concat(self, sep=None, distinct=None):
+    def call_group_concat(
+        self, sep: str | None = None, distinct: NumericConstMonad | None = None
+    ) -> ExprMonad:
         if sep is not None:
             if not isinstance(sep, str):
                 throw(
@@ -5368,11 +6255,11 @@ class QuerySetMonad(SetMixin, Monad):
                 )
         return self.aggregate("GROUP_CONCAT", distinct, sep=sep)
 
-    def getsql(self):
+    def getsql(self, sqlquery: SqlQuery | None = None) -> list[list[str | list]]:
         return [self.subtranslator.construct_subquery_ast(self.limit, self.offset)]
 
 
-def find_or_create_having_ast(sections):
+def find_or_create_having_ast(sections: list) -> list:
     groupby_offset = None
     for i, section in enumerate(sections):
         section_name = section[0]
@@ -5381,5 +6268,6 @@ def find_or_create_having_ast(sections):
         elif section_name == "HAVING":
             return section
     having_ast = ["HAVING"]
+    assert isinstance(groupby_offset, int)
     sections.insert(groupby_offset + 1, having_ast)
     return having_ast

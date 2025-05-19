@@ -1,5 +1,6 @@
 {
   "include": [
+    "pony/**/*.py",
     "pony/**/*.pyi",
     "pony/orm/tests",
     "pony/orm/examples"
@@ -7,7 +8,10 @@
 
   "exclude": [
     "pony/orm/tests/fixtures.py",
-    "pony/orm/examples/bottle_example.py"
+    "pony/orm/examples/bottle_example.py",
+    "pony/orm/integration",
+    "pony/thirdparty",
+    "pony/flask",
   ],
 
   "defineConstant": {

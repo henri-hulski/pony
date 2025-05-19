@@ -1,10 +1,12 @@
+# pyright: reportMissingImports=false
+
 from collections.abc import Iterable, Sequence
 from datetime import timedelta
 from re import Pattern
 from types import ModuleType
 from typing import Any, ClassVar
 
-import cx_Oracle  # type: ignore
+import cx_Oracle
 from typing_extensions import LiteralString
 
 from pony.orm.core import DbConnection, ParamKey, PyType, TableName

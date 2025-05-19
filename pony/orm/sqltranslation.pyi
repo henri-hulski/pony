@@ -29,7 +29,6 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from io import BytesIO
-from itertools import count as _count
 from types import EllipsisType, TracebackType
 from typing import Any, ClassVar, Generic, NoReturn, TypeAlias, TypeVar, overload
 from uuid import UUID
@@ -62,7 +61,7 @@ from pony.orm.core import (
 )
 from pony.orm.dbapiprovider import Converter
 from pony.orm.ormtypes import Array, FuncType, Json, RawSQL, RawSQLType, SetType
-from pony.utils.utils import localbase
+from pony.utils.utils import IntegerGenerator, localbase
 
 _Ast: TypeAlias = list[str | list[str | int | bool | list]]
 _Conditions: TypeAlias = list[list[list[Sequence[str]]]]
@@ -116,7 +115,7 @@ def sqlor(items: list[list[str | list[str]]]) -> list[str] | list[str | list[str
 def type2str(t: ExprType) -> str: ...
 def wrap_monad_method(cls_name: str, func: Callable[..., _T]) -> Callable[..., _T]: ...
 
-translator_counter: _count
+translator_counter: IntegerGenerator
 local: Local
 
 class IncomparableTypesError(TypeError):
@@ -313,7 +312,7 @@ class SQLTranslator(ASTTranslator):
 class SqlQuery:
     alias_counters: dict[str, int]
     conditions: _Conditions
-    expr_counter: _count[int]
+    expr_counter: IntegerGenerator
     expr_list: list[list[str]]
     from_ast: _Ast
     left_join: bool
@@ -1314,9 +1313,9 @@ class FuncConcatMonad(FuncMonad):
 class FuncCountMonad(FuncMonad):
     func: ClassVar[
         tuple[
-            Callable[..., int | _count[int]],
-            Callable[..., int | _count[int]],
-            Callable[..., int | _count[int]],
+            Callable[..., int | IntegerGenerator],
+            Callable[..., int | IntegerGenerator],
+            Callable[..., int | IntegerGenerator],
         ]
     ]
 

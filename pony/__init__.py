@@ -6,7 +6,7 @@ from os.path import dirname
 __version__ = "0.7.20"
 
 
-def detect_mode():
+def detect_mode() -> str:
     try:
         _google_appengine = importlib.import_module("google.appengine")
     except ImportError:
