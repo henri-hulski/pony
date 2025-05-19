@@ -2,13 +2,11 @@
 
 """Run the Pony ORM and utility test suites on Python 3.10 through 3.14."""
 
-from __future__ import print_function
 
 import os
 import shutil
 import subprocess
 import sys
-
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 PYTHON_VERSIONS = ('3.10', '3.11', '3.12', '3.13', '3.14')
@@ -153,11 +151,7 @@ def main():
     print('{:<8} {:<12} {:<12}'.format('Python', 'ORM', 'Utils'))
     for version, orm_exit, utils_exit in results:
         print(
-            '{:<8} {:<12} {:<12}'.format(
-                version,
-                format_status(orm_exit),
-                format_status(utils_exit),
-            )
+            f'{version:<8} {format_status(orm_exit):<12} {format_status(utils_exit):<12}'
         )
 
     return int(any(

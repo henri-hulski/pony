@@ -186,7 +186,7 @@ class TestFuncMonad(unittest.TestCase):
         ),
     )
     def test_datetime_now2(self):
-        select(s for s in Student if 1 < datetime.now())
+        select(s for s in Student if 1 < datetime.now())  # type: ignore # error expected
 
     def test_datetime_now3(self):
         result = set(select(s for s in Student if s.dob < datetime.today()))
