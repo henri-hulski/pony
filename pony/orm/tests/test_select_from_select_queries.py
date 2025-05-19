@@ -23,7 +23,7 @@ class Student(db.Entity):
 
     @property
     def full_name(self):
-        return self.first_name + ' ' + self.last_name
+        return str(self.first_name) + ' ' + str(self.last_name)
 
 
 class Course(db.Entity):
@@ -58,6 +58,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_1(self):  # basic select from another query
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(s for s in q if s.scholarship < 500)
+        assert db.last_sql is not None
         self.assertEqual(set(s.first_name for s in q2), {'Alex', 'John', 'Bruce'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)  # single SELECT...FROM expression
 
@@ -65,6 +66,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_2(self):  # different variable name in the second query
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(x for x in q if x.scholarship < 500)
+        assert db.last_sql is not None
         self.assertEqual(set(s.first_name for s in q2), {'Alex', 'John', 'Bruce'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -72,6 +74,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_3(self):  # selecting single column instead of entity in the second query
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(x.first_name for x in q if x.scholarship < 500)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Alex', 'Bruce', 'John'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -79,6 +82,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_4(self):  # selecting single column instead of entity in the first query
         q = select(s.first_name for s in Student if s.scholarship > 0)
         q2 = select(name for name in q if 'r' in name)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Bruce', 'Mary'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -86,6 +90,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_5(self):  # selecting hybrid property in the second query
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(x.full_name for x in q if x.scholarship < 500)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Alex Green', 'Bruce Lee', 'John Brown'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -93,6 +98,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_6(self):  # selecting hybrid property in the first query
         q = select(s.full_name for s in Student if s.scholarship < 500)
         q2 = select(x for x in q if x.startswith('J'))
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'John Smith', 'John Brown'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -100,7 +106,7 @@ class TestSelectFromSelect(unittest.TestCase):
     @raises_exception(ExprEvalError, "`s.scholarship > 0` raises NameError: name 's' is not defined")
     def test_7(self):  # test access to original query var name from the new query
         q = select(s.first_name for s in Student if s.scholarship < 500)
-        q2 = select(x for x in q if s.scholarship > 0)
+        q2 = select(x for x in q if s.scholarship > 0)  # type: ignore # error expected
 
     @db_session
     def test_8(self):  # test using external name which is equal to original query var name
@@ -115,6 +121,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_9(self):  # test reusing variable name from the original query
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(x for x in q for s in Student if x.scholarship < s.scholarship)
+        assert db.last_sql is not None
         self.assertEqual(set(s.first_name for s in q2), {'Alex', 'John', 'Bruce'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -124,6 +131,7 @@ class TestSelectFromSelect(unittest.TestCase):
         q2 = q.filter(lambda a: a.scholarship < 500)
         q3 = select(x for x in q2 if x.age > 20)
         q4 = q3.filter(lambda b: b.age < 24)
+        assert db.last_sql is not None
         self.assertEqual(set(s.first_name for s in q4), {'Bruce'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -133,6 +141,7 @@ class TestSelectFromSelect(unittest.TestCase):
         q2 = q.where(lambda s: s.scholarship < 500)
         q3 = select(x for x in q2 if x.age > 20)
         q4 = q3.where(lambda x: x.age < 24)  # the name should be accessible in previous generator
+        assert db.last_sql is not None
         self.assertEqual(set(s.first_name for s in q4), {'Bruce'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -148,6 +157,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_13(self):  # select several expressions from the first query
         q = select((s.full_name, s.age) for s in Student if s.scholarship > 0)
         q2 = select(name for name, age in q if age < 24 and 'e' in name)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Mary White', 'Bruce Lee'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -155,6 +165,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_14(self):  # select from entity with composite key
         q = select(c for c in Course if c.semester == 1)
         q2 = select(x.name for x in q if x.name.startswith('M'))
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Math'})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -162,6 +173,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_15(self):  # SELECT ... FROM (SELECT alias.* FROM ...
         q = left_join(s for g in Group for s in g.students if g.number == 123 and s.scholarship > 0)
         q2 = select(x.full_name for x in q if x.scholarship > 100)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Mary White'})
         self.assertEqual(db.last_sql.count('SELECT'), 2)
         self.assertEqual(db.last_sql.count('LEFT JOIN'), 1)
@@ -172,6 +184,7 @@ class TestSelectFromSelect(unittest.TestCase):
         q = select(g for g in Group if count(g.students) > 2)
         q2 = select(x.number for x in q)
 
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {123})
         self.assertEqual(db.last_sql.count('SELECT'), 2)
         self.assertEqual(db.last_sql.count('LEFT JOIN'), 1)
@@ -184,6 +197,7 @@ class TestSelectFromSelect(unittest.TestCase):
         q = select(g for g in Group if count(g.students) > 2)
         q2 = select(x.major for x in q)
 
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {'Computer Science'})
         self.assertEqual(db.last_sql.count('SELECT'), 2)
         self.assertEqual(db.last_sql.count('LEFT JOIN'), 1)
@@ -195,6 +209,7 @@ class TestSelectFromSelect(unittest.TestCase):
         q = select((c, count(c.students)) for c in Course if c.semester == 1 and count(c.students) > 1)
         q2 = select((x.name, x.credits, y) for x, y in q if x.credits > 10 and y < 3)
 
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {('Computer Science', 20, 2)})
         self.assertEqual(db.last_sql.count('SELECT'), 2)
         self.assertEqual(db.last_sql.count('LEFT JOIN'), 1)
@@ -313,6 +328,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_35(self):
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(s.id for s in Student if s not in q)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {1})
         self.assertEqual(db.last_sql.count('SELECT'), 2)
 
@@ -320,6 +336,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_36(self):
         q = select(s for s in Student if s.scholarship > 0)
         q2 = select(s.id for s in Student if s not in q[:])
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {1})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -327,6 +344,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_37(self):
         q = select(s.last_name for s in Student if s.scholarship > 0)
         q2 = select(s.id for s in Student if s.last_name not in q)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {1})
         self.assertEqual(db.last_sql.count('SELECT'), 2)
 
@@ -334,6 +352,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_38(self):
         q = select(s.last_name for s in Student if s.scholarship > 0)
         q2 = select(s.id for s in Student if s.last_name not in q[:])
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {1})
         self.assertEqual(db.last_sql.count('SELECT'), 1)
 
@@ -341,6 +360,7 @@ class TestSelectFromSelect(unittest.TestCase):
     def test_39(self):
         q = select((s.first_name, s.last_name) for s in Student if s.scholarship > 0)
         q2 = select(s.id for s in Student if (s.first_name, s.last_name) not in q)
+        assert db.last_sql is not None
         self.assertEqual(set(q2), {1})
         self.assertTrue(db.last_sql.count('SELECT') > 1)
 

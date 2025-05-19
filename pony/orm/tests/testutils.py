@@ -69,14 +69,22 @@ class TestConnection(object):
 
 class TestCursor(object):
     __test__ = False
-    def __init__(cursor):
-        cursor.description = []
-        cursor.rowcount = 0
+    @property
+    def description(self):
+        return []
+    @property
+    def rowcount(self):
+        return 0
+    @property
+    def lastrowid(self):
+        return None
     def execute(cursor, sql, args=None):
+        pass
+    def executemany(cursor, sql, args):
         pass
     def fetchone(cursor):
         return None
-    def fetchmany(cursor, size):
+    def fetchmany(cursor, size=10):
         return []
     def fetchall(cursor):
         return []
@@ -136,7 +144,7 @@ class TestDatabase(Database):
         Database.bind(self, TestProvider, *args, **kwargs)
     def _execute(database, sql, globals, locals, frame_depth):
         assert False  # pragma: no cover
-    def _exec_sql(database, sql, arguments=None, returning_id=False):
+    def _exec_sql(database, sql, arguments=None, returning_id=False, start_transaction=False):  # type: ignore
         assert type(arguments) is not list and not returning_id
         database.sql = sql
         database.arguments = arguments

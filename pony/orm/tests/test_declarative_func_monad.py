@@ -114,7 +114,7 @@ class TestFuncMonad(unittest.TestCase):
         "'<' not supported between instances of 'int' and 'datetime'" if PYPY else
         "'<' not supported between instances of 'int' and 'datetime.datetime'"))
     def test_datetime_now2(self):
-        select(s for s in Student if 1 < datetime.now())
+        select(s for s in Student if 1 < datetime.now())  # type: ignore # error expected
     def test_datetime_now3(self):
         result = set(select(s for s in Student if s.dob < datetime.today()))
         self.assertEqual(result, {Student[1], Student[2], Student[3], Student[4], Student[5]})

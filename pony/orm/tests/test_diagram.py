@@ -12,7 +12,7 @@ class TestDiag(unittest.TestCase):
     @raises_exception(ERDiagramError, 'Entity Entity1 already exists')
     def test_entity_duplicate(self):
         db = Database()
-        class Entity1(db.Entity):
+        class Entity1(db.Entity):  # type: ignore # error expected
             id = PrimaryKey(int)
         class Entity1(db.Entity):
             id = PrimaryKey(int)
@@ -103,7 +103,7 @@ class TestDiag(unittest.TestCase):
         db = Database()
         class Entity1(db.Entity):
             id = PrimaryKey(int)
-            attr1 = Set('Entity2')
+            attr1: 'Set[Entity2]' = Set('Entity2')
         class Entity2(db.Entity):
             id = PrimaryKey(int)
             attr2 = Set(Entity1)
@@ -113,7 +113,7 @@ class TestDiag(unittest.TestCase):
             m2m_table = db.schema.tables['entity1_attr1']
             col_names = set(m2m_table.columns)
             self.assertEqual(col_names, {'entity1_id', 'entity2_id'})
-            m2m_columns = [c.name for c in Entity1.attr1.meta.m2m_columns]
+            m2m_columns = [c.name for c in Entity1.attr1.meta.m2m_columns]  # type: ignore # future syntax
             self.assertEqual(m2m_columns, ['entity1_id'])
         else:
             table_name = 'Entity1_Entity2' if db.provider.dialect == 'SQLite' else 'entity1_entity2'

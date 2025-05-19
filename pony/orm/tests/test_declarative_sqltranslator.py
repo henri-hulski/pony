@@ -418,39 +418,39 @@ class TestSQLTranslator(unittest.TestCase):
     @raises_exception(TypeError, 'In order to do item assignment, cast QueryResult to list first')
     def test_query_result_setitem(self):
         result = select(s for s in Student)[:]
-        result[0] = None
+        result[0] = None  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do item deletion, cast QueryResult to list first')
     def test_query_result_delitem(self):
         result = select(s for s in Student)[:]
-        del result[0]
+        del result[0]  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do +=, cast QueryResult to list first')
     def test_query_result_iadd(self):
         result = select(s for s in Student)[:]
-        result += None
+        result += None  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do append, cast QueryResult to list first')
     def test_query_result_append(self):
         result = select(s for s in Student)[:]
-        result.append(None)
+        result.append(None)  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do clear, cast QueryResult to list first')
     def test_query_result_clear(self):
         result = select(s for s in Student)[:]
-        result.clear()
+        result.clear()  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do extend, cast QueryResult to list first')
     def test_query_result_extend(self):
         result = select(s for s in Student)[:]
-        result.extend([])
+        result.extend([])  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do insert, cast QueryResult to list first')
     def test_query_result_insert(self):
         result = select(s for s in Student)[:]
-        result.insert(0, None)
+        result.insert(0, None)  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do pop, cast QueryResult to list first')
     def test_query_result_pop(self):
         result = select(s for s in Student)[:]
-        result.pop()
+        result.pop()  # type: ignore # error expected
     @raises_exception(TypeError, 'In order to do remove, cast QueryResult to list first')
     def test_query_result_remove(self):
         result = select(s for s in Student)[:]
-        result.remove(None)
+        result.remove(None)  # type: ignore # error expected
     def test_if_expression(self):
         result = select(s.id if s.picture else -s.id for s in Student)[:]
         self.assertEqual({1, -2, -3}, set(result))

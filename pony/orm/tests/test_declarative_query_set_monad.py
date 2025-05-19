@@ -200,10 +200,12 @@ class TestQuerySetMonad(unittest.TestCase):
 
     def test_avg_3(self):
         result = select(c.semester for c in Course).avg()
+        assert result is not None
         self.assertAlmostEqual(1.33, result, places=2)
 
     def test_avg_4(self):
         result = select(c.semester for c in Course).avg(distinct=True)
+        assert result is not None
         self.assertAlmostEqual(1.5, result)
 
     def test_avg_5(self):

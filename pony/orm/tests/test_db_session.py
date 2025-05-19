@@ -1,8 +1,6 @@
 from __future__ import absolute_import, print_function, division
 
 import unittest, warnings
-from datetime import date
-from decimal import Decimal
 from itertools import count
 
 from pony.orm.core import *
@@ -28,11 +26,11 @@ class TestDBSession(unittest.TestCase):
 
     @raises_exception(TypeError, "Pass only keyword arguments to db_session or use db_session as decorator")
     def test_db_session_1(self):
-        db_session(1, 2, 3)
+        db_session(1, 2, 3)  # type: ignore # error expected
 
     @raises_exception(TypeError, "Pass only keyword arguments to db_session or use db_session as decorator")
     def test_db_session_2(self):
-        db_session(1, 2, 3, a=10, b=20)
+        db_session(1, 2, 3, a=10, b=20)  # type: ignore # error expected
 
     def test_db_session_3(self):
         self.assertTrue(db_session is db_session())
@@ -59,7 +57,7 @@ class TestDBSession(unittest.TestCase):
         @db_session
         def test():
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -73,7 +71,7 @@ class TestDBSession(unittest.TestCase):
         @db_session(allowed_exceptions=[TypeError])
         def test():
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -87,7 +85,7 @@ class TestDBSession(unittest.TestCase):
         @db_session(allowed_exceptions=[ZeroDivisionError])
         def test():
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -101,7 +99,7 @@ class TestDBSession(unittest.TestCase):
         @db_session(allowed_exceptions=lambda e: isinstance(e, ZeroDivisionError))
         def test():
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -115,7 +113,7 @@ class TestDBSession(unittest.TestCase):
         @db_session(allowed_exceptions=lambda e: isinstance(e, TypeError))
         def test():
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -143,7 +141,7 @@ class TestDBSession(unittest.TestCase):
         def test():
             next(counter)
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -160,7 +158,7 @@ class TestDBSession(unittest.TestCase):
         def test():
             next(counter)
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -177,7 +175,7 @@ class TestDBSession(unittest.TestCase):
         def test():
             next(counter)
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -194,7 +192,7 @@ class TestDBSession(unittest.TestCase):
         def test():
             next(counter)
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -211,7 +209,7 @@ class TestDBSession(unittest.TestCase):
         def test():
             i = next(counter)
             self.X(a=3, b=3)
-            if i < 2: 1/0
+            if i < 2: 1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -236,7 +234,7 @@ class TestDBSession(unittest.TestCase):
         def test():
             i = next(counter)
             self.X(a=3, b=3)
-            1/0
+            1/0  # type: ignore
         try:
             test()
         except ZeroDivisionError:
@@ -288,7 +286,7 @@ class TestDBSession(unittest.TestCase):
         try:
             with db_session(allowed_exceptions=[TypeError]):
                 self.X(a=3, b=3)
-                1/0
+                1/0  # type: ignore
         except ZeroDivisionError:
             with db_session:
                 self.assertEqual(count(x for x in self.X), 2)
@@ -300,7 +298,7 @@ class TestDBSession(unittest.TestCase):
         try:
             with db_session(allowed_exceptions=[ZeroDivisionError]):
                 self.X(a=3, b=3)
-                1/0
+                1/0  # type: ignore
         except ZeroDivisionError:
             with db_session:
                 self.assertEqual(count(x for x in self.X), 3)
@@ -348,8 +346,8 @@ class TestDBSession(unittest.TestCase):
     @raises_exception(ZeroDivisionError)
     def test_db_session_exceptions_1(self):
         def before_insert(self):
-            1/0
-        self.X.before_insert = before_insert
+            1/0  # type: ignore
+        self.X.before_insert = before_insert  # type: ignore # error expected
         with db_session:
             self.X(a=3, b=3)
             # Should raise ZeroDivisionError and not CommitException
@@ -357,8 +355,8 @@ class TestDBSession(unittest.TestCase):
     @raises_exception(ZeroDivisionError)
     def test_db_session_exceptions_2(self):
         def before_insert(self):
-            1 / 0
-        self.X.before_insert = before_insert
+            1 / 0  # type: ignore
+        self.X.before_insert = before_insert  # type: ignore # error expected
         with db_session:
             self.X(a=3, b=3)
             commit()
@@ -367,8 +365,8 @@ class TestDBSession(unittest.TestCase):
     @raises_exception(ZeroDivisionError)
     def test_db_session_exceptions_3(self):
         def before_insert(self):
-            1 / 0
-        self.X.before_insert = before_insert
+            1 / 0  # type: ignore
+        self.X.before_insert = before_insert  # type: ignore # error expected
         with db_session:
             self.X(a=3, b=3)
             db.commit()
@@ -379,7 +377,7 @@ class TestDBSession(unittest.TestCase):
         with db_session:
             connection = self.db.get_connection()
             connection.close()
-            1/0
+            1/0  # type: ignore
 
 
 db = Database()
