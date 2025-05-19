@@ -1,0 +1,26 @@
+{
+  "include": [
+    "pony/**/*.pyi",
+    "pony/orm/tests",
+    "pony/orm/examples"
+  ],
+
+  "exclude": [
+    "pony/orm/tests/fixtures.py",
+    "pony/orm/examples/bottle_example.py"
+  ],
+
+  "defineConstant": {
+    "DEBUG": true
+  },
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": true,
+  "reportSelfClsParameterName": false,
+  "reportArgumentType": false,
+  "reportUnnecessaryCast": true,
+  "reportUnnecessaryTypeIgnoreComment": true,
+  "reportPossiblyUnboundVariable": false,
+
+  "pythonVersion": "3.9",
+  "pythonPlatform": "Linux"
+}
