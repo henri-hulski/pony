@@ -3,6 +3,7 @@ from ast import (
     Attribute,
     BinOp,
     BoolOp,
+    Bytes,
     Call,
     Compare,
     Constant,
@@ -13,7 +14,10 @@ from ast import (
     JoinedStr,
     List,
     Name,
+    NameConstant,
+    Num,
     Slice,
+    Str,
     Subscript,
     Tuple,
     UnaryOp,
@@ -48,7 +52,7 @@ def is_const(
 ) -> bool: ...
 def make_const(
     value: _ConstValue | tuple[_ConstValue, ...] | tuple[tuple, ...],
-) -> Constant: ...
+) -> Constant | Num | Str | Bytes | Tuple | NameConstant: ...
 def simplify(clause: expr) -> expr: ...
 
 class DecompileError(NotImplementedError): ...
@@ -123,7 +127,7 @@ class Decompiler:
     def LOAD_CONST(
         decompiler,
         const_value: _ConstValue | tuple[_ConstValue, ...] | tuple[tuple, ...],
-    ) -> Constant: ...
+    ) -> Constant | Num | Str | Bytes | Tuple | NameConstant: ...
     def LOAD_DEREF(decompiler, freevar: str) -> Name: ...
     def LOAD_FAST(decompiler, varname: str) -> Name: ...
     def LOAD_GLOBAL(decompiler, varname: str, push_null: int) -> Name: ...

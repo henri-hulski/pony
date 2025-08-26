@@ -1565,7 +1565,9 @@ class SQLTranslator(ASTTranslator):
     def postNameConstant(
         translator, node: ast.NameConstant
     ) -> ConstMonad:  # Python <= 3.7
-        return ConstMonad.new(node.value)
+        result = ConstMonad.new(node.value)
+        assert not isinstance(result, ListMonad)
+        return result
 
     def postNum(translator, node: ast.Num) -> NumericConstMonad:  # Python <= 3.7
         return ConstMonad.new(cast(int | float, node.n))

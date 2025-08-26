@@ -122,7 +122,7 @@ def clean_assign(node):
 
 def make_const(
     value: _ConstValue | tuple[_ConstValue, ...] | tuple[tuple, ...],
-) -> ast.Constant:
+) -> ast.Constant | ast.Num | ast.Str | ast.Bytes | ast.Tuple | ast.NameConstant:
     if is_const(value):
         assert isinstance(value, ast.Constant)
         return value
@@ -137,13 +137,34 @@ def make_const(
     elif isinstance(value, bytes):
         return ast.Bytes(value)
     elif isinstance(value, tuple):
-        return ast.Tuple([make_const(elt) for elt in value], ast.Load())  # type: ignore
+        if PY39:
+            return ast.Constant(value)
+        elif PY38:
+            return ast.Constant(value, None)
+        else:
+            return ast.Tuple([make_const(elt) for elt in value], ast.Load())
     elif value in (True, False, None):
-        return ast.NameConstant(value)
+        if PY39:
+            return ast.Constant(value)
+        elif PY38:
+            return ast.Constant(value, None)
+        else:
+            # For older Python versions, use NameConstant with proper arguments
+            return ast.NameConstant(value=value, kind=None)
     elif isinstance(value, types.CodeType):
-        return ast.Constant(value)
+        if PY39:
+            return ast.Constant(value)
+        elif PY38:
+            return ast.Constant(value, None)
+        else:
+            return ast.Constant(value)
     elif value is Ellipsis:
-        return ast.Constant(value)
+        if PY39:
+            return ast.Constant(value)
+        elif PY38:
+            return ast.Constant(value, None)
+        else:
+            return ast.Constant(value)
     assert False, value
 
 
@@ -493,6 +514,7 @@ class Decompiler(object):
         keys = decompiler.stack.pop()
         if PY38:
             assert isinstance(keys, ast.Constant), keys
+            assert isinstance(keys.value, (tuple, list))
             keys = [make_const(key) for key in keys.value]
         else:
             assert isinstance(keys, ast.Tuple) and is_const(keys), keys
@@ -917,7 +939,7 @@ class Decompiler(object):
     def LOAD_CONST(
         decompiler,
         const_value: _ConstValue | tuple[_ConstValue, ...] | tuple[tuple, ...],
-    ) -> ast.Constant:
+    ) -> ast.Constant | ast.Num | ast.Str | ast.Bytes | ast.Tuple | ast.NameConstant:
         return make_const(const_value)
 
     def LOAD_DEREF(decompiler, freevar: str) -> ast.Name:
