@@ -161,6 +161,7 @@ _AET_co = TypeVar("_AET_co", bound="AttrValue | Entity", covariant=True)
 _OAT_co = TypeVar("_OAT_co", bound="OptAttrValue", covariant=True)
 _AT_co = TypeVar("_AT_co", bound="AttrValue", covariant=True)
 _ET_co = TypeVar("_ET_co", bound="Entity", covariant=True)
+_ET = TypeVar("_ET", bound="Entity")
 _AT = TypeVar("_AT", bound=AttrValue)
 _CT = TypeVar("_CT", bound=Coroutine)
 _GT = TypeVar("_GT", bound=Generator)
@@ -5871,38 +5872,44 @@ class SetInstance(Generic[_ET_co]):
             reverse = attr.reverse
             if not reverse:
                 throw(NotImplementedError)
-            new_items = attr.validate(new_items, obj)
-            if not new_items:
+            validated_items = attr.validate(new_items, obj)
+            assert isinstance(
+                validated_items, set
+            )  # Type narrowing: validate always returns set[Entity]
+            if not validated_items:
                 return
             setdata = obj._vals_.get(attr)
             if setdata is not None:
-                new_items -= setdata
+                validated_items -= setdata
             if setdata is None or not setdata.is_fully_loaded:
-                setdata = attr.load(obj, new_items)
-            new_items -= setdata
+                setdata = attr.load(obj, validated_items)
+            validated_items -= setdata
             undo_funcs = []
             try:
                 if not reverse.is_collection:
-                    for item in new_items:
+                    for item in validated_items:
                         reverse.__set__(item, obj, undo_funcs)
                 else:
                     assert isinstance(reverse, Set)
-                    reverse.reverse_add(new_items, obj, undo_funcs)
+                    reverse.reverse_add(validated_items, obj, undo_funcs)
             except:
                 for undo_func in reversed(undo_funcs):
                     undo_func()
                 raise
-        setdata |= new_items
+        setdata |= validated_items
         if setdata.count is not None:
-            setdata.count += len(new_items)
-        added = setdata.added
-        removed = setdata.removed
+            setdata.count += len(validated_items)
+        added: set[Entity] | None = setdata.added
+        removed: set[Entity] | None = setdata.removed
         if removed:
-            (new_items, setdata.removed) = (new_items - removed, removed - new_items)
+            (validated_items, setdata.removed) = (
+                validated_items - removed,
+                removed - validated_items,
+            )
         if added:
-            added |= new_items
+            added |= validated_items
         else:
-            setdata.added = new_items  # added may be None
+            setdata.added = validated_items  # added may be None
 
         cache.modified_collections[attr].add(obj)
         cache.modified = True
@@ -5926,6 +5933,9 @@ class SetInstance(Generic[_ET_co]):
             if not reverse:
                 throw(NotImplementedError)
             items = attr.validate(items, obj)
+            assert isinstance(
+                items, set
+            )  # Type narrowing: validate always returns set[Entity]
             setdata = obj._vals_.get(attr)
             if setdata is not None and setdata.removed:
                 items -= setdata.removed
@@ -5933,7 +5943,7 @@ class SetInstance(Generic[_ET_co]):
                 return
             if setdata is None or not setdata.is_fully_loaded:
                 setdata = attr.load(obj, items)
-            items &= setdata
+            items = cast(set[Entity], cast(set[Entity], items) & setdata)
             undo_funcs = []
             try:
                 if not reverse.is_collection:
@@ -5953,8 +5963,8 @@ class SetInstance(Generic[_ET_co]):
         setdata -= items
         if setdata.count is not None:
             setdata.count -= len(items)
-        added = setdata.added
-        removed = setdata.removed
+        added: set[Entity] | None = setdata.added
+        removed: set[Entity] | None = setdata.removed
         if added:
             (items, setdata.added) = (items - added, added - items)
         if removed:
@@ -6722,6 +6732,10 @@ class EntityMeta(type):
         return True
 
     @cut_traceback
+    @overload
+    def get(entity: type[_ET], *args, **kwargs) -> _ET | None: ...
+
+    @cut_traceback
     def get(entity, *args, **kwargs) -> Entity | None:
         if args:
             return entity._query_from_args_(
@@ -6731,6 +6745,10 @@ class EntityMeta(type):
             return entity._find_one_(kwargs)  # can throw MultipleObjectsFoundError
         except ObjectNotFound:
             return None
+
+    @cut_traceback
+    @overload
+    def get_for_update(entity: type[_ET], *args, **kwargs) -> _ET | None: ...
 
     @cut_traceback
     def get_for_update(entity, *args, **kwargs) -> Entity | None:
@@ -6752,6 +6770,15 @@ class EntityMeta(type):
             )  # can throw MultipleObjectsFoundError
         except ObjectNotFound:
             return None
+
+    @cut_traceback
+    @overload
+    def get_by_sql(
+        entity: type[_ET],
+        sql: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+    ) -> _ET | None: ...
 
     @cut_traceback
     def get_by_sql(
@@ -6781,6 +6808,14 @@ class EntityMeta(type):
         return query
 
     @cut_traceback
+    @overload
+    def select_by_sql(
+        entity: type[_ET],
+        sql: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+    ) -> list[_ET]: ...
+
     def select_by_sql(
         entity,
         sql: str,
@@ -6792,6 +6827,9 @@ class EntityMeta(type):
         )
 
     @cut_traceback
+    @overload
+    def select_random(entity: type[_ET], limit: int) -> list[_ET]: ...
+
     def select_random(entity, limit: int) -> list[Entity]:
         if entity._pk_is_composite_:
             return entity.select().random(limit)

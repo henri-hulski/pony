@@ -201,6 +201,7 @@ _OAT_co = TypeVar("_OAT_co", bound=OptAttrValue, covariant=True)
 _AT_co = TypeVar("_AT_co", bound=AttrValue, covariant=True)
 _ET_co = TypeVar("_ET_co", bound=Entity, covariant=True)
 _AT = TypeVar("_AT", bound=AttrValue)
+_ET = TypeVar("_ET", bound=Entity)
 _CT = TypeVar("_CT", bound=Coroutine)
 _GT = TypeVar("_GT", bound=Generator)
 _P = ParamSpec("_P")
@@ -1149,21 +1150,46 @@ class EntityMeta(type):
     def describe(entity) -> str: ...
     def drop_table(entity, with_all_data: bool = False) -> None: ...
     def exists(entity, *args, **kwargs) -> bool: ...
+    @overload
+    def get(entity: type[_ET], *args, **kwargs) -> _ET | None: ...
+    @overload
     def get(entity, *args, **kwargs) -> Entity | None: ...
+    @overload
+    def get_by_sql(
+        entity: type[_ET],
+        sql: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+    ) -> _ET | None: ...
+    @overload
     def get_by_sql(
         entity,
         sql: str,
         globals: dict[str, object] | None = None,
         locals: dict[str, object] | None = None,
     ) -> Entity | None: ...
+    @overload
+    def get_for_update(entity: type[_ET], *args, **kwargs) -> _ET | None: ...
+    @overload
     def get_for_update(entity, *args, **kwargs) -> Entity | None: ...
     def select(entity, *args, **kwargs) -> Query: ...
+    @overload
+    def select_by_sql(
+        entity: type[_ET],
+        sql: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+    ) -> list[_ET]: ...
+    @overload
     def select_by_sql(
         entity,
         sql: str,
         globals: dict[str, object] | None = None,
         locals: dict[str, object] | None = None,
     ) -> list[Entity]: ...
+    @overload
+    def select_random(entity: type[_ET], limit: int) -> list[_ET]: ...
+    @overload
     def select_random(entity, limit: int) -> list[Entity]: ...
 
 class Entity(metaclass=EntityMeta):
