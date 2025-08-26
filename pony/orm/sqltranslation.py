@@ -1573,10 +1573,14 @@ class SQLTranslator(ASTTranslator):
         return ConstMonad.new(cast(int | float, node.n))
 
     def postStr(translator, node: ast.Str) -> StringConstMonad:  # Python <= 3.7
-        return ConstMonad.new(node.s)
+        result = ConstMonad.new(node.s)
+        assert isinstance(result, StringConstMonad)
+        return result
 
     def postBytes(translator, node: ast.Bytes) -> BufferConstMonad:  # Python <= 3.7
-        return ConstMonad.new(node.s)
+        result = ConstMonad.new(node.s)
+        assert isinstance(result, BufferConstMonad)
+        return result
 
     def postList(translator, node: ast.List) -> ListMonad:
         return ListMonad([item.monad for item in node.elts])
@@ -4166,6 +4170,23 @@ class ConstMonad(Monad, Generic[_CT]):
     @overload
     @staticmethod
     def new(value: ellipsis) -> EllipsisMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        value: object,
+    ) -> (
+        ListMonad
+        | NumericConstMonad
+        | StringConstMonad
+        | DateConstMonad
+        | DatetimeConstMonad
+        | TimeConstMonad
+        | TimedeltaConstMonad
+        | NoneMonad
+        | BufferConstMonad
+        | JsonConstMonad
+        | EllipsisMonad
+    ): ...
     @staticmethod
     def new(value):
         value_type, value = normalize(value)

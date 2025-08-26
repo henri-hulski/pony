@@ -1112,6 +1112,23 @@ class ConstMonad(Monad, Generic[_CT]):
     @overload
     @staticmethod
     def new(value: ellipsis) -> EllipsisMonad: ...
+    @overload
+    @staticmethod
+    def new(
+        value: object,
+    ) -> (
+        ListMonad
+        | NumericConstMonad
+        | StringConstMonad
+        | DateConstMonad
+        | DatetimeConstMonad
+        | TimeConstMonad
+        | TimedeltaConstMonad
+        | NoneMonad
+        | BufferConstMonad
+        | JsonConstMonad
+        | EllipsisMonad
+    ): ...
 
 class NoneMonad(ConstMonad[None]):
     def __init__(monad, value: None = None) -> None: ...
