@@ -58,7 +58,6 @@ from pony.utils import (
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, ClassVar, Literal, NoReturn, TypeVar, cast
 
-
 _T = TypeVar("_T")
 
 

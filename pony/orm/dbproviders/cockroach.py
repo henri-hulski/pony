@@ -8,7 +8,7 @@ from datetime import datetime, date, time, timedelta
 from uuid import UUID
 
 try:
-    import psycopg2  # type: ignore
+    import psycopg2
 except ImportError:
     try:
         from psycopg2cffi import compat  # type: ignore

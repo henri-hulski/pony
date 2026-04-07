@@ -123,8 +123,7 @@ ConstType: TypeAlias = "type[bytes | Decimal | _DateTime]"
 Constant: TypeAlias = "str | Numeric | _DateTime | Json | bytes | ellipsis | None"
 CodeKey: TypeAlias = "str | int"
 VarKey: TypeAlias = tuple[int, str, CodeKey]
-VarType: TypeAlias = (
-    """
+VarType: TypeAlias = """
     EntityMeta
     | PyType
     | SetType
@@ -134,7 +133,6 @@ VarType: TypeAlias = (
     | RawSQLType
     | type[None]
     """
-)
 ExprType: TypeAlias = "VarType | tuple[VarType, ...]"
 VarTypes: TypeAlias = "HashableDict[VarKey, ExprType] | dict[VarKey, ExprType]"
 QueryVars: TypeAlias = dict[
@@ -5276,14 +5274,14 @@ class Set(Collection[_ET_co]):
         removed = setdata.removed
         if to_add:
             if removed:
-                (to_add, setdata.removed) = (to_add - removed, removed - to_add)
+                to_add, setdata.removed = (to_add - removed, removed - to_add)
             if added:
                 added |= to_add
             else:
                 setdata.added = to_add  # added may be None
         if to_remove:
             if added:
-                (to_remove, setdata.added) = (to_remove - added, added - to_remove)
+                to_remove, setdata.added = (to_remove - added, added - to_remove)
             if removed:
                 removed |= to_remove
             else:
@@ -5902,7 +5900,7 @@ class SetInstance(Generic[_ET_co]):
         added: set[Entity] | None = setdata.added
         removed: set[Entity] | None = setdata.removed
         if removed:
-            (validated_items, setdata.removed) = (
+            validated_items, setdata.removed = (
                 validated_items - removed,
                 removed - validated_items,
             )
@@ -5966,7 +5964,7 @@ class SetInstance(Generic[_ET_co]):
         added: set[Entity] | None = setdata.added
         removed: set[Entity] | None = setdata.removed
         if added:
-            (items, setdata.added) = (items - added, added - items)
+            items, setdata.added = (items - added, added - items)
         if removed:
             removed |= items
         else:

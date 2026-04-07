@@ -100,8 +100,7 @@ class OraSequence(DBObject):
         return schema.case("CREATE SEQUENCE %s NOCACHE") % seq_name
 
 
-trigger_template: LiteralString = (
-    """
+trigger_template: LiteralString = """
 CREATE TRIGGER %s
   BEFORE INSERT ON %s
   FOR EACH ROW
@@ -110,7 +109,6 @@ BEGIN
     SELECT %s.nextval INTO :new.%s FROM DUAL;
   END IF;
 END;""".strip()
-)
 
 
 class OraTrigger(DBObject):

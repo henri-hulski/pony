@@ -34,7 +34,7 @@ from typing import Any, ClassVar, cast
 from typing_extensions import LiteralString
 
 try:
-    import psycopg2  # type: ignore
+    import psycopg2
 except ImportError:
     try:
         from psycopg2cffi import compat  # type: ignore
@@ -45,9 +45,9 @@ except ImportError:
     else:
         compat.register()
 
-from psycopg2 import extensions  # type: ignore
+from psycopg2 import extensions
 
-import psycopg2.extras  # type: ignore
+import psycopg2.extras
 
 psycopg2.extras.register_uuid()
 
