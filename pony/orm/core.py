@@ -9132,6 +9132,7 @@ def get_globals_and_locals(args, kwargs, frame_depth, from_generator=False):
             locals = {}
         if type(func) is types.GeneratorType:
             locals = locals.copy()
+            assert func.gi_frame is not None
             locals.update(func.gi_frame.f_locals)
         if len(args) > 3:
             throw(
@@ -9144,6 +9145,7 @@ def get_globals_and_locals(args, kwargs, frame_depth, from_generator=False):
         if frame_depth is not None:
             locals.update(sys._getframe(frame_depth + 1).f_locals)
         if type(func) is types.GeneratorType:
+            assert func.gi_frame is not None
             globals = func.gi_frame.f_globals
             locals.update(func.gi_frame.f_locals)
         elif frame_depth is not None:
@@ -9173,6 +9175,7 @@ def make_query(
     )
     if isinstance(gen, types.GeneratorType):
         tree, external_names, cells = decompile(gen)
+        assert gen.gi_frame is not None
         code_key = id(gen.gi_frame.f_code)
     elif isinstance(gen, str):
         tree = string2ast(gen)
@@ -9217,6 +9220,7 @@ def make_aggrfunc(std_func: Callable) -> Callable:
         arg = args[0]
         if type(arg) is types.GeneratorType:
             try:
+                assert arg.gi_frame is not None
                 iterator = arg.gi_frame.f_locals[".0"]
             except:
                 return std_func(*args, **kwargs)

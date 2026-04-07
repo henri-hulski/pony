@@ -45,6 +45,7 @@ def decompile(
         codeobject = x
     elif t is types.GeneratorType:
         assert isinstance(x, types.GeneratorType)
+        assert x.gi_frame is not None
         codeobject = x.gi_frame.f_code
     elif t is types.FunctionType:
         assert isinstance(x, types.FunctionType)
