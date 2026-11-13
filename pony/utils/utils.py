@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from pony.orm.core import EntityProxy, OptAttrValue, Query, SetInstance
 
 _T = TypeVar("_T")
+_F = TypeVar("_F", bound="Callable[..., Any]")
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 
@@ -123,7 +124,7 @@ cut_traceback_depth: int = 2
 if pony.MODE != "INTERACTIVE":
     cut_traceback_depth = 0
 
-    def cut_traceback(func: Callable) -> Callable:
+    def cut_traceback(func: _F) -> _F:
         return func
 
 
