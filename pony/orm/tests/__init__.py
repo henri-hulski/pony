@@ -68,13 +68,8 @@ def only_for(providers):
                 )
 
             if db_params["provider"] not in providers:
-                result = type(
-                    x.__name__,
-                    (x,),
-                    {"setUpClass": classmethod(setUpClass)},
-                )
-            else:
-                result = x
+                x.setUpClass = setUpClass  # pyright: ignore[reportAttributeAccessIssue]
+            result = x
         elif isinstance(x, types.FunctionType):
 
             def new_test_func(self):
