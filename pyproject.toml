@@ -80,6 +80,7 @@ select = [
     "UP",
     "B",
     "RUF100",
+    "TC",
 ]
 ignore = [
     # Pony expressions intentionally overload comparisons with None and booleans.
@@ -97,7 +98,9 @@ ignore = [
     # Pony wraps database exceptions deliberately and preserves its historical
     # exception surface instead of exposing implementation exception chains.
     "B904",
+    "B905",
 ]
+future-annotations = true
 
 [tool.ruff.lint.per-file-ignores]
 "pony/orm/dbproviders/mysql.py" = ["E402"]
@@ -115,3 +118,27 @@ ignore = [
 
 [tool.ruff.format]
 line-ending = "lf"
+
+[tool.pyright]
+pythonVersion = "3.10"
+include = [
+    "pony/**/*.py",
+    "pony/**/*.pyi",
+    "pony/orm/tests",
+    "pony/orm/examples",
+]
+exclude = [
+    "pony/orm/tests/fixtures.py",
+    "pony/orm/examples/bottle_example.py",
+    "pony/orm/integration",
+    "pony/thirdparty",
+    "pony/flask",
+]
+defineConstant = { DEBUG = true }
+reportMissingImports = true
+reportMissingTypeStubs = true
+reportSelfClsParameterName = false
+reportArgumentType = false
+reportUnnecessaryCast = true
+reportUnnecessaryTypeIgnoreComment = true
+reportPossiblyUnboundVariable = false
