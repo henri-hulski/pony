@@ -1293,7 +1293,9 @@ class Decompiler:
         return ast.Invert(self.stack.pop())
 
     def UNPACK_SEQUENCE(self, count: int) -> ast.Assign:
-        ass_tuple = ast.Assign(targets=ast.Tuple([], ast.Store()))
+        ass_tuple = ast.Assign(
+            targets=ast.Tuple([], ast.Store()), value=ast.Constant(None)
+        )
         ass_tuple.count = count
         return ass_tuple
 
