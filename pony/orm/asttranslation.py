@@ -391,7 +391,7 @@ class PythonTranslator(ASTTranslator[ast.AST]):
 
     def postSet(self, node):
         node.priority = 1
-        return "{%s}" % ", ".join(item.src for item in node.nodes)
+        return "{%s}" % ", ".join(item.src for item in node.elts)
 
     def postName(self, node: ast.Name) -> str:
         node.priority = 1  # pyright: ignore[reportAttributeAccessIssue]
