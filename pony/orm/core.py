@@ -5381,12 +5381,12 @@ class Set(Collection[_ET_co]):
             objects_with_modified_collections.add(obj)
 
         def undo_func():
-            for obj, _in_removed, was_modified_earlier in undo:
+            for obj, in_removed, was_modified_earlier in undo:
                 setdata = obj._vals_[self]
                 setdata.remove(item)
                 if setdata.count is not None:
                     setdata.count -= 1
-                if in_removed:  # pyright: ignore[reportPossiblyUnboundVariable]
+                if in_removed:
                     setdata.removed.add(item)
                 else:
                     setdata.added.remove(item)
@@ -5435,12 +5435,12 @@ class Set(Collection[_ET_co]):
                 setdata.removed.add(item)
 
         def undo_func():
-            for obj, _in_removed, was_modified_earlier in undo:
+            for obj, in_added, was_modified_earlier in undo:
                 setdata = obj._vals_[self]
                 setdata.add(item)
                 if setdata.count is not None:
                     setdata.count += 1
-                if in_added:  # pyright: ignore[reportPossiblyUnboundVariable]
+                if in_added:
                     setdata.added.add(item)
                 else:
                     setdata.removed.remove(item)
@@ -6445,7 +6445,7 @@ class EntityMeta(type):
                 throw(
                     TypeError,
                     "Interleave attribute should be part of relationship. Got: %r"
-                    % attr,  # pyright: ignore[reportPossiblyUnboundVariable]
+                    % interleave,
                 )
             setattr(cls, "_interleave_", interleave)  # noqa: B010
 
