@@ -294,8 +294,8 @@ class PythonTranslator(ASTTranslator[ast.AST]):
         return unaryop_src("+", node)
 
     @priority(4)
-    def postInvert(self, node):
-        return "~" + node.expr.src
+    def postInvert(self, node: ast.UnaryOp) -> str:
+        return "~" + node.operand.src  # pyright: ignore[reportAttributeAccessIssue]
 
     @priority(3)
     def postPow(self, node: ast.BinOp) -> str:
