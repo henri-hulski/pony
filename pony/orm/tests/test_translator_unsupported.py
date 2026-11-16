@@ -31,6 +31,11 @@ class TestTranslatorUnsupported(unittest.TestCase):
     def test_bulk_delete_of_non_entity(self):
         orm.select(p.name for p in Person).delete(bulk=True)
 
+    @raises_exception(NotImplementedError, "~p.id")
+    @orm.db_session
+    def test_invert_operator(self):
+        orm.select(p for p in Person if ~p.id == -2)
+
     @raises_exception(NotImplementedError, "**kwargs is not supported")
     def test_double_star_call_argument(self):
         node = ast.parse("f(**kwargs)", mode="eval").body
