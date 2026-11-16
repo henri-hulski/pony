@@ -115,6 +115,7 @@ if TYPE_CHECKING:
 
     import _typeshed
     from typing_extensions import LiteralString, Self, Unpack
+    from typing_extensions import TypeVar as _TypeVarWithDefault
 
     from pony.orm.dbschema import DBSchema, Table
     from pony.orm.sqlbuilding import SqlAst
@@ -173,11 +174,26 @@ ParamKey: TypeAlias = "tuple[VarKey | int, int | None, int | None]"
 QueryKey: TypeAlias = HashableDict[str, Any]
 TableName: TypeAlias = "str | tuple[str, str]"
 
-_OAET_co = TypeVar("_OAET_co", bound="OptAttrValue | Entity", covariant=True)
-_AET_co = TypeVar("_AET_co", bound="AttrValue | Entity", covariant=True)
+if TYPE_CHECKING:
+    # The type of an attribute that refers to an entity by name or lazily, such as
+    # ``Set("Car")``, cannot be known statically. With a default the type checkers
+    # infer ``Set[Any]`` instead of ``Set[Unknown]`` (pyright, reported in strict
+    # mode) or ``Set[Never]`` (mypy, which then asks for a type annotation).
+    # ``typing.TypeVar`` only accepts ``default`` since Python 3.13, so the runtime
+    # declarations in the ``else`` branch omit it.
+    _OAET_co = _TypeVarWithDefault(
+        "_OAET_co", bound="OptAttrValue | Entity", covariant=True, default=Any
+    )
+    _AET_co = _TypeVarWithDefault(
+        "_AET_co", bound="AttrValue | Entity", covariant=True, default=Any
+    )
+    _ET_co = _TypeVarWithDefault("_ET_co", bound="Entity", covariant=True, default=Any)
+else:
+    _OAET_co = TypeVar("_OAET_co", bound="OptAttrValue | Entity", covariant=True)
+    _AET_co = TypeVar("_AET_co", bound="AttrValue | Entity", covariant=True)
+    _ET_co = TypeVar("_ET_co", bound="Entity", covariant=True)
 _OAT_co = TypeVar("_OAT_co", bound="OptAttrValue", covariant=True)
 _AT_co = TypeVar("_AT_co", bound="AttrValue", covariant=True)
-_ET_co = TypeVar("_ET_co", bound="Entity", covariant=True)
 _ET = TypeVar("_ET", bound="Entity")
 _AT = TypeVar("_AT", bound=AttrValue)
 _CT = TypeVar("_CT", bound=Coroutine)
@@ -3442,6 +3458,23 @@ class Attribute(Generic[_OAET_co]):
     def __deepcopy__(self, memo: dict[int, object]) -> Self:
         return self  # Attribute cannot be cloned by deepcopy()
 
+    # The overloads keep ``type[T]`` apart from the other forms. For mypy
+    # ``LiteralString`` is just ``str``, and the class ``str`` is itself a callable
+    # returning ``str``, so in a single union ``Required(str)`` would match two
+    # alternatives and mypy could not solve ``T`` (it inferred ``Required[Never]``).
+    @overload
+    def __init__(self, py_type: type[_OAET_co], *args, **kwargs) -> None: ...
+    @overload
+    def __init__(
+        self, py_type: Callable[..., type[_OAET_co]], *args, **kwargs
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        py_type: LiteralString | Callable[..., EntityMeta | LiteralString],
+        *args,
+        **kwargs,
+    ) -> None: ...
     @cut_traceback
     def __init__(
         self,
@@ -4643,13 +4676,15 @@ class PrimaryKey(Required[_AET_co]):
     __slots__ = []
 
     @overload
+    def __new__(cls, py_type: type[_AET_co], *args: int, **kwargs) -> Self: ...
+    @overload
+    def __new__(
+        cls, py_type: Callable[..., type[_AET_co]], *args: int, **kwargs
+    ) -> Self: ...
+    @overload
     def __new__(
         cls,
-        py_type: (
-            type[_AET_co]
-            | LiteralString
-            | Callable[..., type[_AET_co] | EntityMeta | LiteralString]
-        ),
+        py_type: LiteralString | Callable[..., EntityMeta | LiteralString],
         *args: int,
         **kwargs,
     ) -> Self: ...
@@ -4721,6 +4756,19 @@ class Collection(Attribute[_ET_co]):
     table: TableName | None
     wrapper_class: type[SetInstance]
 
+    @overload
+    def __init__(self, py_type: type[_ET_co], *args, **kwargs) -> None: ...
+    @overload
+    def __init__(
+        self, py_type: Callable[..., type[_ET_co]], *args, **kwargs
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        py_type: LiteralString | Callable[..., EntityMeta | LiteralString],
+        *args,
+        **kwargs,
+    ) -> None: ...
     def __init__(
         self,
         py_type: (

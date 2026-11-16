@@ -142,3 +142,12 @@ root = "pony/orm/dbproviders"
 extraPaths = ["."]
 reportMissingImports = false
 reportMissingModuleSource = false
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+# Only the typing check is verified with mypy for now. Errors inside the imported
+# pony modules themselves are not reported (they are not mypy-clean yet), but
+# the public API they expose is still used for type inference.
+files = ["pony/orm/tests/typing_check.py"]
+follow_imports = "silent"
