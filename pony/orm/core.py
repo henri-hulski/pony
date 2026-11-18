@@ -7503,7 +7503,7 @@ class EntityMeta(type):
             elt=ast.Name(name, ast.Load()), generators=[for_expr]
         )
 
-        locals = locals.copy() if locals is not None else {}
+        locals = dict(locals) if locals is not None else {}
         locals[".0"] = cls
         return Query(code_key, inner_expr, globals, locals, cells)
 
@@ -9220,7 +9220,7 @@ def get_globals_and_locals(args, kwargs, frame_depth, from_generator=False):
             frame = func.gi_frame
             if frame is None:
                 throw(TypeError, "Generator expression is no longer active")
-            locals = locals.copy()
+            locals = dict(locals)
             locals.update(frame.f_locals)
         if len(args) > 3:
             throw(
@@ -9373,7 +9373,7 @@ def extract_vars(
     cells: dict[str, types.CellType] | None = None,
 ) -> tuple[QueryVars, VarTypes]:
     if cells:
-        locals = locals.copy()
+        locals = dict(locals)
         for name, cell in cells.items():
             try:
                 locals[name] = cell.cell_contents

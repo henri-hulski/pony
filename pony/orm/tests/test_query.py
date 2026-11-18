@@ -1,5 +1,6 @@
 import pickle
 import unittest
+from collections.abc import Iterator, Mapping
 from datetime import date
 from decimal import Decimal
 
@@ -21,6 +22,22 @@ class Student(db.Entity):
 class Group(db.Entity):
     number = PrimaryKey(int)
     students = Set(Student)
+
+
+class SimpleMapping(Mapping):
+    """A read-only mapping that is not a dict and has no copy() method"""
+
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self) -> Iterator:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
 
 
 class TestQuery(unittest.TestCase):
@@ -288,6 +305,25 @@ class TestQuery(unittest.TestCase):
         gen = (s.name for s in Student)
         names = select(gen, env, None)  # pyright: ignore[reportArgumentType]
         self.assertEqual(sorted(names), ["S1", "S2", "S3"])
+
+    def test_explicit_locals_mapping_generator(self):
+        env: dict[str, object] = {"Student": Student}
+        x = 1
+        gen = (s.name for s in Student if s.id > x)
+        names = select(gen, env, SimpleMapping({}))  # pyright: ignore[reportArgumentType]
+        self.assertEqual(sorted(names), ["S2", "S3"])
+
+    def test_explicit_locals_mapping_str_lambda(self):
+        env: dict[str, object] = {"Student": Student}
+        locals_ = SimpleMapping({"x": 1})
+        students = Student.select("lambda s: s.id > x", env, locals_)
+        self.assertEqual([s.id for s in students.order_by(1)], [2, 3])
+
+    def test_explicit_locals_mapping_closure(self):
+        env: dict[str, object] = {"Student": Student}
+        x = 2
+        students = Student.select(lambda s: s.id > x, env, SimpleMapping({}))
+        self.assertEqual([s.id for s in students], [3])
 
     @raises_exception(
         TypeError,
