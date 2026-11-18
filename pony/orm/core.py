@@ -1114,7 +1114,7 @@ class DBSessionContextManager:
             throw_: Any = getattr(iterator, "throw", None)
             if throw_ is None:
                 reraise(*exc_info)
-            return throw_(*exc_info)
+            return throw_(exc_info[1])
 
         @wraps(gen_func)
         def new_gen_func(*args, **kwargs):
@@ -1238,7 +1238,7 @@ class SQLDebuggingContextManager:
             throw_: Any = getattr(iterator, "throw", None)
             if throw_ is None:
                 reraise(*exc_info)
-            return throw_(*exc_info)
+            return throw_(exc_info[1])
 
         def new_gen_func(gen_func, *args, **kwargs):
             def wrapped_interact(iterator, input=None, exc_info=None):
