@@ -184,6 +184,12 @@ _CT = TypeVar("_CT", bound=Coroutine)
 _GT = TypeVar("_GT", bound=Generator)
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
+_QueryT = TypeVar("_QueryT")
+
+# The positional arguments of select() and friends: a query, optionally followed
+# by globals and locals. eval() requires the globals to be a real dict, but
+# accepts any mapping as locals, and None means no locals.
+_QueryArgs: TypeAlias = "tuple[_QueryT] | tuple[_QueryT, dict[str, Any]] | tuple[_QueryT, dict[str, Any], Mapping[str, object] | None]"
 
 
 class DbCursor(Protocol):
@@ -1551,8 +1557,8 @@ class Database:
     def execute(
         self,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> DbCursor:
         return self._exec_raw_sql(
             sql,
@@ -1565,8 +1571,8 @@ class Database:
     def _exec_raw_sql(
         self,
         sql: str,
-        globals: dict[str, object] | None,
-        locals: dict[str, object] | None,
+        globals: dict[str, Any] | None,
+        locals: Mapping[str, object] | None,
         frame_depth: int,
         start_transaction: bool = False,
     ) -> DbCursor:
@@ -1592,8 +1598,8 @@ class Database:
     def select(
         self,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
         frame_depth: int = 0,
     ) -> list[tuple[OptAttrValue, ...]] | list[OptAttrValue]:
         if not select_re.match(sql):
@@ -1624,8 +1630,8 @@ class Database:
     def get(
         self,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> OptAttrValue | tuple[OptAttrValue, ...]:
         rows = self.select(sql, globals, locals, frame_depth=cut_traceback_depth + 1)
         if not rows:
@@ -1639,8 +1645,8 @@ class Database:
     def exists(
         self,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> bool:
         if not select_re.match(sql):
             sql = "select " + sql
@@ -6071,7 +6077,7 @@ class SetInstance(Generic[_ET_co]):
             if reverse.is_collection
             else "lambda item: item.%s == obj"
         )
-        query = query.filter(s % reverse.name, {"obj": obj, "JOIN": JOIN})  # pyright: ignore[reportArgumentType]
+        query = query.filter(s % reverse.name, {"obj": obj, "JOIN": JOIN})
         if args:
             func, globals, locals = get_globals_and_locals(
                 args, kwargs, frame_depth=cut_traceback_depth + 1
@@ -6840,22 +6846,22 @@ class EntityMeta(type):
     def get_by_sql(
         cls: type[_ET],
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> _ET | None: ...
     @overload
     def get_by_sql(
         cls,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> Entity | None: ...
     @cut_traceback
     def get_by_sql(
         cls,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> Entity | None:
         objects = cls._find_by_sql_(
             1, sql, globals, locals, frame_depth=cut_traceback_depth + 1
@@ -6881,22 +6887,22 @@ class EntityMeta(type):
     def select_by_sql(
         cls: type[_ET],
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> list[_ET]: ...
     @overload
     def select_by_sql(
         cls,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> list[Entity]: ...
     @cut_traceback
     def select_by_sql(
         cls,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
     ) -> list[Any]:
         return cls._find_by_sql_(
             None, sql, globals, locals, frame_depth=cut_traceback_depth + 1
@@ -7123,8 +7129,8 @@ class EntityMeta(type):
         cls,
         max_fetch_count: int | None,
         sql: str,
-        globals: dict[str, object] | None,
-        locals: dict[str, object] | None,
+        globals: dict[str, Any] | None,
+        locals: Mapping[str, object] | None,
         frame_depth: int,
     ) -> list[Entity]:
         if not isinstance(sql, str):
@@ -7462,7 +7468,7 @@ class EntityMeta(type):
 
     def _query_from_args_(
         cls,
-        args: tuple[str | types.FunctionType, Unpack[tuple[dict[str, object], ...]]],
+        args: _QueryArgs[str | types.FunctionType],
         kwargs: dict[Any, Any],
         frame_depth: int,
     ) -> Query:
@@ -9164,20 +9170,20 @@ def string2ast(s: str) -> ast.expr:
 
 @overload
 def get_globals_and_locals(
-    args: tuple[str | types.FunctionType, Unpack[tuple[dict[str, object], ...]]],
+    args: _QueryArgs[str | types.FunctionType],
     /,
     kwargs: dict[str, object] | None,
     frame_depth: int | None,
     from_generator: Literal[False] = False,
-) -> tuple[str | types.FunctionType, dict[str, object], dict[str, object]]: ...
+) -> tuple[str | types.FunctionType, dict[str, Any], Mapping[str, object]]: ...
 @overload
 def get_globals_and_locals(
-    args: tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]],
+    args: _QueryArgs[str | Iterator],
     /,
     kwargs: dict[str, object] | None,
     frame_depth: int | None,
     from_generator: Literal[True],
-) -> tuple[str | types.GeneratorType, dict[str, object], dict[str, object]]: ...
+) -> tuple[str | types.GeneratorType, dict[str, Any], Mapping[str, object]]: ...
 def get_globals_and_locals(args, kwargs, frame_depth, from_generator=False):
     args_len = len(args)
     assert args_len > 0
@@ -9249,7 +9255,7 @@ def get_globals_and_locals(args, kwargs, frame_depth, from_generator=False):
 
 
 def make_query(
-    args: tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]],
+    args: _QueryArgs[str | Iterator],
     frame_depth: int | None,
     left_join: bool = False,
 ) -> Query:
@@ -9276,38 +9282,73 @@ def make_query(
     return Query(code_key, tree, globals, locals, cells, left_join)  # pyright: ignore[reportArgumentType]
 
 
-@cut_traceback
+@overload
+def select(query: str | Iterator, /) -> Query: ...
+@overload
 def select(
-    *args: Unpack[tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]]],
-) -> Query:
+    query: str | Iterator,
+    globals: dict[str, Any],
+    locals: Mapping[str, object] | None = None,
+    /,
+) -> Query: ...
+@cut_traceback
+def select(*args: Any) -> Query:
     return make_query(args, frame_depth=cut_traceback_depth + 1)
 
 
-@cut_traceback
+@overload
+def left_join(query: str | Iterator, /) -> Query: ...
+@overload
 def left_join(
-    *args: Unpack[tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]]],
-) -> Query:
+    query: str | Iterator,
+    globals: dict[str, Any],
+    locals: Mapping[str, object] | None = None,
+    /,
+) -> Query: ...
+@cut_traceback
+def left_join(*args: Any) -> Query:
     return make_query(args, frame_depth=cut_traceback_depth + 1, left_join=True)
 
 
-@cut_traceback
+@overload
+def get(query: str | Iterator, /) -> Any: ...
+@overload
 def get(
-    *args: Unpack[tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]]],
-) -> Any:
+    query: str | Iterator,
+    globals: dict[str, Any],
+    locals: Mapping[str, object] | None = None,
+    /,
+) -> Any: ...
+@cut_traceback
+def get(*args: Any) -> Any:
     return make_query(args, frame_depth=cut_traceback_depth + 1).get()
 
 
-@cut_traceback
+@overload
+def exists(query: str | Iterator, /) -> bool: ...
+@overload
 def exists(
-    *args: Unpack[tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]]],
-) -> bool:
+    query: str | Iterator,
+    globals: dict[str, Any],
+    locals: Mapping[str, object] | None = None,
+    /,
+) -> bool: ...
+@cut_traceback
+def exists(*args: Any) -> bool:
     return make_query(args, frame_depth=cut_traceback_depth + 1).exists()
 
 
-@cut_traceback
+@overload
+def delete(query: str | Iterator, /) -> int: ...
+@overload
 def delete(
-    *args: Unpack[tuple[str | Iterator, Unpack[tuple[dict[str, object], ...]]]],
-) -> int:
+    query: str | Iterator,
+    globals: dict[str, Any],
+    locals: Mapping[str, object] | None = None,
+    /,
+) -> int: ...
+@cut_traceback
+def delete(*args: Any) -> int:
     return make_query(args, frame_depth=cut_traceback_depth + 1).delete()
 
 
@@ -9368,8 +9409,8 @@ def extract_vars(
     code_key: CodeKey,
     filter_num: int,
     extractors: dict[str, Callable],
-    globals: dict[str, object],
-    locals: dict[str, object],
+    globals: dict[str, Any],
+    locals: Mapping[str, object],
     cells: dict[str, types.CellType] | None = None,
 ) -> tuple[QueryVars, VarTypes]:
     if cells:
@@ -9465,8 +9506,8 @@ class Query:
         self,
         code_key: CodeKey,
         tree: ast.GeneratorExp,
-        globals: dict[str, object],
-        locals: dict[str, object],
+        globals: dict[str, Any],
+        locals: Mapping[str, object],
         cells: dict[str, types.CellType] | None = None,
         left_join: bool = False,
     ) -> None:
@@ -9951,8 +9992,8 @@ class Query:
     def order_by(
         self,
         func: Callable | str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
         /,
     ) -> Query: ...
     @overload
@@ -9969,8 +10010,8 @@ class Query:
     def sort_by(
         self,
         func: Callable | str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
         /,
     ) -> Query: ...
     @overload
@@ -10045,8 +10086,8 @@ class Query:
     def _process_lambda(
         self,
         func: str | Callable,
-        globals: dict[str, object],
-        locals: dict[str, object],
+        globals: dict[str, Any],
+        locals: Mapping[str, object],
         order_by: bool = False,
         original_names: bool = False,
     ) -> Query:
@@ -10202,8 +10243,8 @@ class Query:
     def filter(
         self,
         func: Callable | str | RawSQL,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
         /,
     ) -> Self: ...
     @overload
@@ -10233,8 +10274,8 @@ class Query:
     def where(
         self,
         func: Callable | str | RawSQL,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
         /,
     ) -> Self: ...
     @overload

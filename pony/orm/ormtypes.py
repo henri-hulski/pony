@@ -22,7 +22,7 @@ from pony.py23compat import buffer, int_types
 from pony.utils import deref_proxy, parse_expr, throw
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
     from typing_extensions import Self
 
@@ -202,8 +202,8 @@ class RawSQL:
     def __init__(
         self,
         sql: str,
-        globals: dict[str, object] | None = None,
-        locals: dict[str, object] | None = None,
+        globals: dict[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None,
         result_type: PyType | None = None,
     ) -> None:
         self.sql = sql

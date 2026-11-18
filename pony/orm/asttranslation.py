@@ -8,7 +8,7 @@ from pony.py23compat import PY38
 from pony.utils import throw
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     from pony.orm.core import CodeKey, ConstType
 
@@ -423,8 +423,8 @@ nonexternalizable_types = (ast.keyword, ast.Starred, ast.Slice, ast.List, ast.Tu
 
 
 class PreTranslator(ASTTranslator[ast.AST]):
-    globals: dict[str, object]
-    locals: dict[str, object]
+    globals: dict[str, Any]
+    locals: Mapping[str, object]
     special_functions: set[Callable]
     const_functions: set[ConstType]
     contexts: list[Iterable[str]]
@@ -433,8 +433,8 @@ class PreTranslator(ASTTranslator[ast.AST]):
     def __init__(
         self,
         tree: ast.AST,
-        globals: dict[str, object],
-        locals: dict[str, object],
+        globals: dict[str, Any],
+        locals: Mapping[str, object],
         special_functions: set[Callable],
         const_functions: set[ConstType],
         outer_names: Sequence[str] = (),
@@ -612,8 +612,8 @@ extractors_cache = {}
 def create_extractors(
     code_key: CodeKey,
     tree: _ExprT,
-    globals: dict[str, object],
-    locals: dict[str, object],
+    globals: dict[str, Any],
+    locals: Mapping[str, object],
     special_functions: set[Callable],
     const_functions: set[ConstType],
     outer_names: Sequence[str] = (),

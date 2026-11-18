@@ -286,51 +286,58 @@ class TestQuery(unittest.TestCase):
         self.assertEqual([s.id for s in students1], [2, 3])
 
     def test_explicit_globals_and_locals(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         names = select("s.name for s in Student if s.id > x", env, {"x": 1})
         self.assertEqual(sorted(names), ["S2", "S3"])
 
     def test_explicit_locals_none_str(self):
-        env: dict[str, object] = {"Student": Student}
-        names = select("s.name for s in Student", env, None)  # pyright: ignore[reportArgumentType]
+        env = {"Student": Student}
+        names = select("s.name for s in Student", env, None)
         self.assertEqual(sorted(names), ["S1", "S2", "S3"])
 
     def test_explicit_locals_none_lambda(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         students = Student.select("lambda s: s.id == 1", env, None)
         self.assertEqual([s.id for s in students], [1])
 
     def test_explicit_locals_none_generator(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         gen = (s.name for s in Student)
-        names = select(gen, env, None)  # pyright: ignore[reportArgumentType]
+        names = select(gen, env, None)
         self.assertEqual(sorted(names), ["S1", "S2", "S3"])
 
     def test_explicit_locals_mapping_generator(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         x = 1
         gen = (s.name for s in Student if s.id > x)
-        names = select(gen, env, SimpleMapping({}))  # pyright: ignore[reportArgumentType]
+        names = select(gen, env, SimpleMapping({}))
         self.assertEqual(sorted(names), ["S2", "S3"])
 
     def test_explicit_locals_mapping_str_lambda(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         locals_ = SimpleMapping({"x": 1})
         students = Student.select("lambda s: s.id > x", env, locals_)
         self.assertEqual([s.id for s in students.order_by(1)], [2, 3])
 
     def test_explicit_locals_mapping_closure(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         x = 2
         students = Student.select(lambda s: s.id > x, env, SimpleMapping({}))
         self.assertEqual([s.id for s in students], [3])
+
+    def test_select_by_sql_mapping_locals(self):
+        env = {"Student": Student}
+        students = Student.select_by_sql(
+            "select * from Student where id > $x", env, SimpleMapping({"x": 1})
+        )
+        self.assertEqual(sorted(s.id for s in students), [2, 3])
 
     @raises_exception(
         TypeError,
         "The third positional arguments should be locals dictionary. Got: 5",
     )
     def test_explicit_locals_invalid(self):
-        env: dict[str, object] = {"Student": Student}
+        env = {"Student": Student}
         select("s for s in Student", env, 5)  # pyright: ignore[reportArgumentType]
 
 
