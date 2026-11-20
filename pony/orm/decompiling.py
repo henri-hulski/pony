@@ -645,7 +645,7 @@ class Decompiler:
                 for item in items
             ]
         items += [None] * (3 - len(items))
-        return ast.Slice(*items, ctx=ast.Load())
+        return ast.Slice(*items)
 
     def BUILD_TUPLE(self, size: int) -> ast.Tuple:
         return ast.Tuple(self.pop_items(size), ast.Load())
