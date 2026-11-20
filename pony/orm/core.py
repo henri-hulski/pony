@@ -9213,7 +9213,9 @@ def get_globals_and_locals(args, kwargs, frame_depth, from_generator=False):
             )
         if args_len > 2:
             locals = args[2]
-            if local is not None and not hasattr(locals, "keys"):
+            if locals is None:
+                locals = {}
+            elif not hasattr(locals, "keys"):
                 throw(
                     TypeError,
                     "The third positional arguments should be locals dictionary. Got: %r"

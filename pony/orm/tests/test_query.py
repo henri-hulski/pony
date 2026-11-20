@@ -268,6 +268,35 @@ class TestQuery(unittest.TestCase):
         students1 = Student.select(lambda s: s.id > 1).order_by(Student.id)[:]
         self.assertEqual([s.id for s in students1], [2, 3])
 
+    def test_explicit_globals_and_locals(self):
+        env = {"Student": Student}
+        names = select("s.name for s in Student if s.id > x", env, {"x": 1})
+        self.assertEqual(sorted(names), ["S2", "S3"])
+
+    def test_explicit_locals_none_str(self):
+        env = {"Student": Student}
+        names = select("s.name for s in Student", env, None)
+        self.assertEqual(sorted(names), ["S1", "S2", "S3"])
+
+    def test_explicit_locals_none_lambda(self):
+        env = {"Student": Student}
+        students = Student.select("lambda s: s.id == 1", env, None)
+        self.assertEqual([s.id for s in students], [1])
+
+    def test_explicit_locals_none_generator(self):
+        env = {"Student": Student}
+        gen = (s.name for s in Student)
+        names = select(gen, env, None)
+        self.assertEqual(sorted(names), ["S1", "S2", "S3"])
+
+    @raises_exception(
+        TypeError,
+        "The third positional arguments should be locals dictionary. Got: 5",
+    )
+    def test_explicit_locals_invalid(self):
+        env = {"Student": Student}
+        select("s for s in Student", env, 5)  # pyright: ignore[reportArgumentType]
+
 
 if __name__ == "__main__":
     unittest.main()
