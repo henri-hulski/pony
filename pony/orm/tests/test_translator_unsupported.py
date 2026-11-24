@@ -1,6 +1,6 @@
 import ast
 import unittest
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pony import orm
 from pony.orm.sqltranslation import SQLTranslator
@@ -9,8 +9,13 @@ from pony.orm.tests.testutils import raises_exception
 
 db = orm.Database()
 
+if TYPE_CHECKING:
+    from pony.orm.core import Entity
+else:
+    Entity = db.Entity
 
-class Person(db.Entity):
+
+class Person(Entity):
     name = orm.Required(str)
 
 

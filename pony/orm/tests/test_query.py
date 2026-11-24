@@ -3,6 +3,7 @@ import unittest
 from collections.abc import Iterator, Mapping
 from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from pony.orm.core import *
 from pony.orm.tests import setup_database, teardown_database
@@ -10,8 +11,13 @@ from pony.orm.tests.testutils import *
 
 db = Database()
 
+if TYPE_CHECKING:
+    from pony.orm.core import Entity
+else:
+    Entity = db.Entity
 
-class Student(db.Entity):
+
+class Student(Entity):
     name = Required(str)
     scholarship = Optional(int)
     gpa = Optional(Decimal, 3, 1)
@@ -19,7 +25,7 @@ class Student(db.Entity):
     dob = Optional(date)
 
 
-class Group(db.Entity):
+class Group(Entity):
     number = PrimaryKey(int)
     students = Set(Student)
 
@@ -95,7 +101,7 @@ class TestQuery(unittest.TestCase):
 
     @raises_exception(ExprEvalError, "`a` raises NameError: name 'a' is not defined")
     def test4(self):
-        select(a for s in Student)  # type: ignore # error expected
+        select(a for s in Student)  # error expected  # pyright: ignore[reportUndefinedVariable]
 
     @raises_exception(
         TypeError, "Incomparable types 'str' and 'StrArray' in expression: s.name == x"
@@ -261,7 +267,7 @@ class TestQuery(unittest.TestCase):
         def find_by_gpa():
             if False:
                 gpa = Decimal("3.1")
-            return lambda s: s.gpa > gpa  # type: ignore # error expected
+            return lambda s: s.gpa > gpa  # error expected  # pyright: ignore[reportUndefinedVariable]
 
         fn = find_by_gpa()
         students = list(Student.select(fn))
