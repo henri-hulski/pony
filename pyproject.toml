@@ -42,7 +42,6 @@ Source = "https://github.com/ponyorm/pony"
 [tool.setuptools]
 include-package-data = false
 packages = [
-    "pony",
     "pony.flask",
     "pony.flask.example",
     "pony.orm",
