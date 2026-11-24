@@ -130,8 +130,12 @@ exclude = [
     "pony/flask",
 ]
 reportMissingImports = true
-reportUnnecessaryCast = true
-reportUnnecessaryTypeIgnoreComment = true
+
+# Shared ``# type: ignore`` comments are also needed by mypy only, so pyright
+# cannot tell whether they are unnecessary. Mypy checks them with
+# warn_unused_ignores. Re-enable occasionally to find stale ``# pyright: ignore``
+# comments.
+# reportUnnecessaryTypeIgnoreComment = true
 
 # The DB drivers are optional dependencies: don't report them as missing, and
 # don't report unnecessary ignores when they are installed.
@@ -140,3 +144,43 @@ root = "pony/orm/dbproviders"
 extraPaths = ["."]
 reportMissingImports = false
 reportMissingModuleSource = false
+
+[tool.mypy]
+python_version = "3.10"
+files = ["pony"]
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = [
+    "pony/orm/tests/fixtures\\.py",
+    "pony/orm/examples/bottle_example\\.py",
+    "pony/orm/integration",
+    "pony/thirdparty",
+    "pony/flask",
+]
+
+# Vendored or optional code that is followed for types but not checked.
+[[tool.mypy.overrides]]
+module = ["pony.thirdparty.*", "pony.flask.*", "pony.orm.integration.*"]
+ignore_errors = true
+
+# The DB drivers are optional dependencies: don't report them as missing.
+[[tool.mypy.overrides]]
+module = ["MySQLdb.*", "pymysql.*", "psycopg2.*", "psycopg2cffi.*", "cx_Oracle.*"]
+ignore_missing_imports = true
+
+# The typing check is verified in mypy's strict mode (``strict`` itself can only
+# be set globally, so its component flags are listed).
+[[tool.mypy.overrides]]
+module = "pony.orm.tests.typing_check"
+ignore_errors = false
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+extra_checks = true
+no_implicit_reexport = true
+strict_equality = true
+warn_return_any = true
